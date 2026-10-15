@@ -12,6 +12,7 @@ async function load() {
   const info = await api('settings');
   $('settings-status').textContent = info.configured ? `OpenAI key configured (${info.source === 'settings' ? 'saved here' : 'environment or key file'}).` : 'Enter your OpenAI API key to enable voice.';
   $('project-id').value = info.projectId;
+  $('allow-renames').checked = info.allowWorkspaceRenames;
   if (info.usage) {
     const u = info.usage;
     $('estimate').textContent = u.events ? `Tracked estimate: ${money(u.totalUsd)} total · ${money(u.todayUsd)} today · ${money(u.monthUsd)} this month` : 'No tracked usage yet. Earlier calls were not measured.';
@@ -24,7 +25,7 @@ async function load() {
 }
 $('key-form').addEventListener('submit', async event => {
   event.preventDefault(); error();
-  const body = { projectId: $('project-id').value.trim() };
+  const body = { projectId: $('project-id').value.trim(), allowWorkspaceRenames: $('allow-renames').checked };
   if ($('api-key').value.trim()) body.apiKey = $('api-key').value.trim();
   if ($('admin-key').value.trim()) body.adminApiKey = $('admin-key').value.trim();
   try { await api('settings', body); $('api-key').value = ''; $('admin-key').value = ''; await load(); }

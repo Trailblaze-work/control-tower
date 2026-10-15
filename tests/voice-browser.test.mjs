@@ -18,8 +18,8 @@ test('browser applies prompt updates between turns and preserves history through
   const config = await runtimeConfig();
   const server = voiceServer({
     port, publicUrl: origin, controlToken: 'test-control', apiKey: 'test-key', ready: () => true,
-    coordinator: { invoke: async (_call, _id, name) => name === 'request_workspace_rename' ? {
-      status: 'requires_user_action', executed: false, kind: 'workspace_rename', requestedTitle: '<img src=x onerror=alert(1)>',
+    coordinator: { invoke: async (_call, _id, name, args) => name === 'request_workspace_rename' && args.title === 'Applied title' ? { status: 'completed', kind: 'workspace_rename', executed: true, workspaceId: 'w', title: 'Applied title' } : name === 'request_workspace_rename' ? {
+      status: 'requires_user_action', executed: false, kind: 'workspace_rename', workspaceId: 'w', requestedTitle: '<img src=x onerror=alert(1)>',
       sdkPlan: { method: 'workspaces.ref(workspaceId).setTitle', workspaceId: 'w', title: '<img src=x onerror=alert(1)>' },
       manualSteps: ['Review the workspace title in Paseo.'], risks: ['Display title only.'],
     } : ({ observed: true }) }, config: async () => structuredClone(config),
@@ -69,6 +69,9 @@ test('browser applies prompt updates between turns and preserves history through
   await page.waitForFunction(() => document.querySelector('#workspace-request-list li'));
   assert.match(await page.locator('#workspace-request-list').textContent(), /<img src=x onerror=alert\(1\)> — not applied/);
   assert.equal(await page.locator('#workspace-request-list img').count(), 0, 'untrusted names render as text, never HTML');
+  await page.evaluate(() => window.channels.at(-1).emit({ type: 'response.function_call_arguments.done', call_id: 'rename-applied', name: 'request_workspace_rename', arguments: JSON.stringify({ workspaceId: 'w', title: 'Applied title', reason: 'User request' }) }));
+  await page.waitForFunction(() => document.querySelector('#workspace-request-list').textContent.includes('Renamed to: Applied title'));
+  assert.equal(await page.locator('#workspace-request-list li').count(), 1, 'success replaces the obsolete pending rename card');
   await page.route('**/api/tool', async route => {
     if (route.request().postDataJSON().invocationId !== 'lost-call') return route.continue();
     return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Call session lost. Refresh conversation to reconnect with saved context.', requestId: 'safe-diagnostic-reference' }) });
@@ -114,10 +117,12 @@ test('laptop settings save write-only keys, display measured usage, and reject s
   assert.equal(new URL(page.url()).hash, '');
   const key = 'sk-browser-test-only-not-a-real-secret';
   await page.getByLabel('OpenAI API key', { exact: true }).fill(key);
+  await page.getByLabel('Allow voice requests to rename workspace display titles').check();
   await page.getByRole('button', { name: 'Save settings', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#settings-status').textContent.includes('saved here'));
   assert.equal(await page.getByLabel('OpenAI API key', { exact: true }).inputValue(), '');
   assert.equal(JSON.parse(await readFile(join(root, 'settings.json'), 'utf8')).apiKey, key);
+  assert.equal(JSON.parse(await readFile(join(root, 'settings.json'), 'utf8')).allowWorkspaceRenames, true);
   const visible = await (await fetch(origin+'/api/settings', { headers: { Authorization: 'Bearer owner-control' } })).text();
   assert.ok(!visible.includes(key));
   const links = await (await fetch(origin+'/api/launch', { method: 'POST', headers: { Authorization: 'Bearer owner-control' } })).json();

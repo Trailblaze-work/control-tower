@@ -5,6 +5,7 @@ import { directory, recentActivity } from './paseo.ts';
 import { Outbox } from './outbox.ts';
 import { creationRequestSchema, renameRequestSchema, prepareWorkspaceRequest, type WorkspaceSummary } from './workspace-requests.ts';
 import { errorCode, silent, type Reporter } from './telemetry.ts';
+import { renameWorkspace } from './workspace-actions.ts';
 
 const id = z.string().min(1).max(200);
 const text = z.string().trim().min(1).max(6000);
@@ -22,13 +23,13 @@ type Job = { id: string; agentId: string; status: string; reply?: string; error?
 export type Conversation = {
   owner: string; createdAt: number; lastSeen: number; transcriptIndex: number; lastUtterance: string;
   knownAgents: Set<string>; knownWorkspaces: Map<string, WorkspaceSummary>; jobs: Map<string, Job>; invocations: Map<string, Promise<unknown>>;
-  model?: string;
+  model?: string; lastUtteranceAt?: number;
 };
 export function conversation(owner: string): Conversation {
   return { owner, createdAt: Date.now(), lastSeen: Date.now(), transcriptIndex: 0, lastUtterance: '', knownAgents: new Set(), knownWorkspaces: new Map(), jobs: new Map(), invocations: new Map() };
 }
 export function recordUtterance(call: Conversation, utterance: string) {
-  call.transcriptIndex++; call.lastUtterance = utterance.trim().toLowerCase().replace(/[.!?,]/g, '').replace(/\s+/g, ' ');
+  call.transcriptIndex++; call.lastUtteranceAt = Date.now(); call.lastUtterance = utterance.trim().toLowerCase().replace(/[.!?,]/g, '').replace(/\s+/g, ' ');
 }
 
 
@@ -43,7 +44,7 @@ export const tools = [
   tool('get_job', 'Check an earlier agent question or relayed decision. Avoid repeated rapid polling.', { jobId: string }, ['jobId']),
   tool('send_message', 'Queue a routine message now, even while its agent is busy. Delivery waits for idle. No repeated confirmation; unsafe actions remain unauthorized.', { agentId: string, message: string }, ['agentId', 'message']),
   tool('cancel_job', 'Cancel an unsent queued message. Never cancels active agent work.', { jobId: string }, ['jobId']),
-  tool('request_workspace_rename', 'Prepare a display-title rename proposal for a discovered workspace. Never applies it; user must review and complete in Paseo.', { workspaceId: string, title: string, reason: string }, ['workspaceId', 'title', 'reason']),
+  tool('request_workspace_rename', 'Rename a discovered workspace display title when the user asks and the owner has enabled voice renames. Otherwise return a manual proposal. Never renames branches or directories.', { workspaceId: string, title: string, reason: string }, ['workspaceId', 'title', 'reason']),
   tool('request_workspace_creation', 'Prepare a new workspace proposal from a discovered workspace/project. Never creates or starts agents. User reviews and completes in Paseo. Worktrees require baseRef and branchName.', { sourceWorkspaceId: string, title: string, purpose: string, kind: { type: 'string', enum: ['worktree', 'directory'] }, baseRef: string, branchName: string }, ['sourceWorkspaceId', 'title', 'purpose', 'kind']),
 ];
 
@@ -51,7 +52,8 @@ export class Coordinator {
   private paseo: PaseoApi;
   private outbox: Outbox;
   private report: Reporter;
-  constructor(paseo: PaseoApi, outbox = new Outbox(paseo), report: Reporter = silent) { this.paseo = paseo; this.outbox = outbox; this.report = report; }
+  private allowRenames: () => Promise<boolean>;
+  constructor(paseo: PaseoApi, outbox = new Outbox(paseo), report: Reporter = silent, allowRenames: () => Promise<boolean> = async () => false) { this.paseo = paseo; this.outbox = outbox; this.report = report; this.allowRenames = allowRenames; }
 
   invoke(call: Conversation, invocationId: string, name: string, args: unknown): Promise<unknown> {
     // Repeated status reads do not consume the side-effect deduplication budget.
@@ -88,7 +90,11 @@ export class Coordinator {
       const overview = await directory(this.paseo, this.report);
       call.knownAgents = new Set(overview.agents.map(agent => agent.id));
       call.knownWorkspaces = new Map(overview.workspaces.map(workspace => [workspace.id, workspace]));
-      return { ...overview, coordinationMessages: this.outbox.list(call.owner) };
+      return { ...overview, capabilities: { workspaceTitleRenames: await this.allowRenames(), workspaceCreation: 'proposal_only' }, coordinationMessages: this.outbox.list(call.owner) };
+    }
+    if (name === 'request_workspace_rename' && await this.allowRenames()) {
+      if (!call.lastUtterance || !call.lastUtteranceAt || Date.now()-call.lastUtteranceAt > 120000) return { error: 'Ask the user to state the rename request in the current call. Startup briefings, agent messages and restored history do not authorize a rename.' };
+      return renameWorkspace(this.paseo, call.knownWorkspaces, raw, invocationId, this.report);
     }
     if (name === 'request_workspace_rename' || name === 'request_workspace_creation') return prepareWorkspaceRequest(name, raw, call.knownWorkspaces);
     if (args.agentId && !call.knownAgents.has(args.agentId)) return { error: 'Use get_overview first and choose a relevant agent from that directory.' };

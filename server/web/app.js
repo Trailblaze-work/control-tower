@@ -45,8 +45,16 @@ function line(role, text) {
   return content;
 }
 function showWorkspaceRequest(result) {
+  if (result.kind === 'workspace_rename' && result.status === 'completed') {
+    for (const prior of [...$('workspace-request-list').children]) if (prior.dataset.workspaceId === result.workspaceId) prior.remove();
+    const item = document.createElement('li'); item.dataset.workspaceId = result.workspaceId;
+    const heading = document.createElement('strong'); heading.textContent = `${result.executed ? 'Renamed to' : 'Already named'}: ${result.title}`;
+    item.append(heading); $('workspace-request-list').append(item);
+    $('workspace-requests').hidden = false; $('workspace-requests').open = true; return;
+  }
   if (result.status !== 'requires_user_action' || result.executed !== false || !result.sdkPlan) return;
   const item = document.createElement('li');
+  if (result.workspaceId) item.dataset.workspaceId = result.workspaceId;
   const heading = document.createElement('strong');
   heading.textContent = `${result.kind === 'workspace_rename' ? 'Rename' : 'Create'}: ${result.requestedTitle} — not applied`;
   item.append(heading);

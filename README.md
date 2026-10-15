@@ -13,7 +13,7 @@ The Paseo sidebar opens a companion call page. Desktop calls use localhost; phon
 | Concise delivery | Outcome-first answers; silent tool use; brief attribution and uncertainty. |
 | Queued coordination | Durable FIFO updates wait for idle agents, survive service restarts and can be cancelled before submission. |
 | PR lookup | Attached PR numbers/URLs, workspace/worktree names, branches, paths and associated agents, with cache qualifiers. |
-| Workspace requests | Reviewable rename/create proposals with metadata and risks; manual completion in Paseo. |
+| Workspace changes | Voice display-title renames when enabled by the owner; reviewable creation proposals completed in Paseo. |
 | Prompt refresh | Apply instructions between turns; preserve bounded text context and pending jobs when reconnecting. |
 | Key configuration | Laptop-only settings form; write-only OpenAI key storage; changes apply to new calls without restart. |
 | Spending | Live estimates from provider token usage, plus optional provider-reported month-to-date costs using an Admin key. |
@@ -86,9 +86,9 @@ The SDK exposes `interrupt` and `steer`, but no atomic idle-only delivery operat
 
 The overview includes cached attached-PR metadata and a PR-to-workspace/agent index. Match repository/URL as well as number: multiple workspaces can own the same PR, and numbers collide across repositories. Missing metadata is unknown, not evidence that no PR exists. Worktree-name fallback to a directory basename is explicitly labelled. The current descriptor exposes one attached PR per workspace; additional PRs mentioned only in conversation require consultation.
 
-`request_workspace_rename` requires a discovered workspace, requested title and reason. `request_workspace_creation` requires a discovered source workspace, title, purpose and directory/worktree choice; worktrees also require an explicit base ref and new branch name. Proposals appear in **Workspace requests — review in Paseo**, with concrete settings and risks. These are session-local drafts: no mutation, new agent or fleet job is performed.
+`request_workspace_rename` requires a discovered workspace, requested title and reason. Enable **Allow voice requests to rename workspace display titles** in laptop settings to apply explicit voice rename requests directly. This defaults off on new installations, applies to all paired callers (including shared links), and can be revoked without a restart. A recent user turn is required; a startup briefing or restored history alone cannot rename anything. The server rechecks workspace identity/current name before writing, recognizes an already-applied title, and deduplicates repeated invocation IDs. An uncertain acknowledgement requires reading fresh state before retrying. When disabled, it returns a manual proposal. `request_workspace_creation` requires a discovered source workspace, title, purpose and directory/worktree choice; worktrees also require an explicit base ref and new branch name. Proposals and successful renames appear in **Workspace changes and requests**. Proposals include concrete settings and risks and are session-local drafts. Creation proposals do not mutate anything, start agents or submit fleet jobs.
 
-Complete proposals manually in Paseo. A title change does not rename the branch or worktree directory. Directory workspaces share existing files; worktree creation can run configured setup hooks. Direct execution would need a separate owner-authentication/approval surface bound to exact arguments, fresh workspace validation, project-hook review, idempotency and uncertain-outcome reconciliation. Shared call links do not identify the owner. Never use an agent relay or an LLM-supplied approval claim to bypass this gate.
+Complete creation proposals and disabled-rename proposals manually in Paseo. An enabled voice title change does not rename the branch or worktree directory. Directory workspaces share existing files; worktree creation can run configured setup hooks. Direct workspace creation would need a separate owner-authentication/approval surface bound to exact arguments, fresh workspace validation, project-hook review, idempotency and uncertain-outcome reconciliation. Shared call links do not identify the owner. Never use an agent relay or an LLM-supplied approval claim to bypass this gate.
 
 ## Updates and recovery
 
@@ -160,6 +160,6 @@ npm run check:web
 npm test
 ```
 
-Tests cover authentication/ownership, origin restrictions, discovery, queue ordering/recovery, PR mappings, non-executing proposals, error classification, key privacy, cost arithmetic and browser refresh/settings flows. They use simulated media/provider responses and do not incur model charges or message real workspace agents. Hosted GitHub Actions runs these checks with Node 24 and Chromium.
+Tests cover authentication/ownership, origin restrictions, discovery, queue ordering/recovery, PR mappings, gated title renames and non-executing creation proposals, error classification, key privacy, cost arithmetic and browser refresh/settings flows. They use simulated media/provider responses and do not incur model charges or message real workspace agents. Hosted GitHub Actions runs these checks with Node 24 and Chromium.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). `npm run smoke:live` is an explicit, billable integration check against real services; it is not part of CI. This repository is private; no public license or distribution grant is included.

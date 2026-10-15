@@ -1,11 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PaseoApi } from '@getpaseo/client';
-import { Coordinator, conversation } from '../server/coordinator.ts';
+import { Coordinator, conversation, recordUtterance } from '../server/coordinator.ts';
 import { Access } from '../server/auth.ts';
 
-function fixture() {
+function fixture(allowRenames: () => Promise<boolean> = async () => false) {
   let status = 'idle'; const sent: { text: string; options: unknown }[] = [];
+  let name = 'Billing'; let title: string | null = null; const renameWrites: string[] = [];
+  const workspace = () => ({ id: 'w', name, title, projectId: 'p', projectDisplayName: 'App', projectRootPath: '/app', workspaceDirectory: '/app/billing', workspaceKind: 'worktree', projectKind: 'git', status: 'idle' });
   const agent = {
     get status() { return status; }, archivedAt: null,
     refresh: async () => ({}), current: () => ({ title: 'Billing' }),
@@ -17,9 +19,9 @@ function fixture() {
       ref: () => agent,
       list: async () => ({ entries: [{ agent: { id: 'a', workspaceId: 'w', title: 'Billing', status, updatedAt: '2026-10-15T09:00:00Z', pendingPermissions: [] } }], pageInfo: { hasMore: false } }),
     },
-    workspaces: { list: async () => ({ entries: [{ id: 'w', name: 'Billing', projectId: 'p', projectDisplayName: 'App', projectRootPath: '/app', workspaceDirectory: '/app/billing', workspaceKind: 'worktree', projectKind: 'git', status: 'idle' }], pageInfo: { hasMore: false } }) },
+    workspaces: { list: async () => ({ entries: [workspace()], pageInfo: { hasMore: false } }), ref: () => ({ refresh: async () => workspace(), setTitle: async (newTitle: string) => { renameWrites.push(newTitle); name = title = newTitle; return { title }; } }) },
   } as unknown as PaseoApi;
-  return { coordinator: new Coordinator(paseo), call: conversation('owner'), sent, busy: () => { status = 'running'; } };
+  return { coordinator: new Coordinator(paseo, undefined, undefined, allowRenames), call: conversation('owner'), sent, renameWrites, renameExternally: (newTitle: string) => { name = title = newTitle; }, busy: () => { status = 'running'; } };
 }
 
 test('pairing links expire, are single-use and establish expiring sessions', () => {
@@ -96,7 +98,7 @@ test('tool arguments are validated and jobs remain isolated between calls', asyn
 });
 
 test('workspace requests require discovery and metadata and never execute mutations or relay approval', async () => {
-  const { coordinator, call, sent } = fixture();
+  const { coordinator, call, sent, renameWrites } = fixture();
   const rename = { workspaceId: 'w', title: 'Billing follow-up', reason: 'Make ownership clear' };
   assert.match((await coordinator.invoke(call, 'undiscovered', 'request_workspace_rename', rename) as { error: string }).error, /get_overview first/);
   await coordinator.invoke(call, 'overview', 'get_overview', {});
@@ -114,9 +116,37 @@ test('workspace requests require discovery and metadata and never execute mutati
   assert.match(shared.risks[0], /sharing existing files/);
   const other = conversation('other');
   assert.match((await coordinator.invoke(other, 'unknown', 'request_workspace_rename', rename) as { error: string }).error, /get_overview first/);
-  // The fixture has no workspace mutation methods; any SDK mutation would fail
-  // rather than return a proposal, and any agent relay would appear here.
   assert.equal(sent.length, 0);
+  assert.equal(renameWrites.length, 0);
+});
+
+test('owner-enabled title renames require a fresh user turn and deduplicate actual writes', async () => {
+  const f = fixture(async () => true);
+  const args = { workspaceId: 'w', title: 'Paseo Voice', reason: 'User requested a clearer title' };
+  await f.coordinator.invoke(f.call, 'overview', 'get_overview', {});
+  const blocked = await f.coordinator.invoke(f.call, 'startup', 'request_workspace_rename', args) as { error: string };
+  assert.match(blocked.error, /current call/); assert.equal(f.renameWrites.length, 0);
+  recordUtterance(f.call, 'Rename the billing workspace to Paseo Voice');
+  const result = await f.coordinator.invoke(f.call, 'rename', 'request_workspace_rename', args) as { status: string; title: string; executed: boolean };
+  assert.equal(result.status, 'completed'); assert.equal(result.title, 'Paseo Voice'); assert.equal(result.executed, true);
+  assert.deepEqual(await f.coordinator.invoke(f.call, 'rename', 'request_workspace_rename', args), result);
+  assert.deepEqual(f.renameWrites, ['Paseo Voice']); assert.equal(f.sent.length, 0);
+  const same = await f.coordinator.invoke(f.call, 'same-title', 'request_workspace_rename', args) as { executed: boolean };
+  assert.equal(same.executed, false); assert.equal(f.renameWrites.length, 1);
+});
+
+test('rename rechecks owner settings and refuses stale workspace names and expired speech context', async () => {
+  let allowed = true; const f = fixture(async () => allowed);
+  const args = { workspaceId: 'w', title: 'Requested title', reason: 'User request' };
+  await f.coordinator.invoke(f.call, 'overview', 'get_overview', {}); recordUtterance(f.call, 'Rename it');
+  f.renameExternally('Another owner renamed this');
+  assert.match((await f.coordinator.invoke(f.call, 'stale', 'request_workspace_rename', args) as { error: string }).error, /changed since discovery/);
+  assert.equal(f.renameWrites.length, 0);
+  allowed = false;
+  assert.equal((await f.coordinator.invoke(f.call, 'disabled', 'request_workspace_rename', args) as { status: string }).status, 'requires_user_action');
+  allowed = true; f.call.lastUtteranceAt = Date.now()-121000;
+  assert.match((await f.coordinator.invoke(f.call, 'expired', 'request_workspace_rename', args) as { error: string }).error, /current call/);
+  assert.equal(f.renameWrites.length, 0);
 });
 
 test('workspace RPC failures keep a specific safe cause and diagnostic reference', async () => {

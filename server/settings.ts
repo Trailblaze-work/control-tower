@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { readPrivateJson, writePrivateJson } from './private-json.ts';
 
 const key = z.string().trim().min(20).max(512).regex(/^sk-[A-Za-z0-9_-]+$/);
-const savedSchema = z.object({ apiKey: key.optional(), adminApiKey: key.optional(), projectId: z.string().max(200).regex(/^[A-Za-z0-9_-]*$/).optional() }).strict();
+const savedSchema = z.object({ apiKey: key.optional(), adminApiKey: key.optional(), projectId: z.string().max(200).regex(/^[A-Za-z0-9_-]*$/).optional(), allowWorkspaceRenames: z.boolean().optional() }).strict();
 export const keyInput = savedSchema.refine(value => Object.keys(value).length > 0);
 export class Settings {
   private billingCache?: { at: number; value: unknown };
@@ -15,7 +15,7 @@ export class Settings {
   }
   async status() {
     const saved = savedSchema.parse((await readPrivateJson(this.path)) ?? {});
-    return { configured: Boolean(await this.key()), source: saved.apiKey ? 'settings' : 'environment_or_key_file', billingConfigured: Boolean(saved.adminApiKey), projectId: saved.projectId ?? '' };
+    return { configured: Boolean(await this.key()), source: saved.apiKey ? 'settings' : 'environment_or_key_file', billingConfigured: Boolean(saved.adminApiKey), projectId: saved.projectId ?? '', allowWorkspaceRenames: saved.allowWorkspaceRenames ?? false };
   }
   async save(raw: unknown) {
     const update = keyInput.parse(raw);

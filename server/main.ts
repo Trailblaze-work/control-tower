@@ -26,7 +26,7 @@ const connectionTimer = setInterval(() => {
   if (connection !== lastConnection) { lastConnection = connection; report({ event: 'paseo_connection', connection }); }
 }, 2000);
 const queueTimer = setInterval(() => { void outbox.tick().catch(() => console.error('Outbox update failed; pending messages remain on disk.')); }, 5000);
-const server = voiceServer({ ...state, access, settings, usage, telemetry, report, apiKey: null, getApiKey: () => settings.key(), connection: () => paseo.getConnectionState().status, coordinator: new Coordinator(paseo, outbox, report), ready: () => paseo.getConnectionState().status === 'connected' });
+const server = voiceServer({ ...state, access, settings, usage, telemetry, report, apiKey: null, getApiKey: () => settings.key(), connection: () => paseo.getConnectionState().status, coordinator: new Coordinator(paseo, outbox, report, async () => (await settings.status()).allowWorkspaceRenames), ready: () => paseo.getConnectionState().status === 'connected' });
 server.on('error', () => { console.error('Could not start voice server. Check whether its port is already in use.'); process.exitCode = 1; void paseo.close(); });
 server.listen(port, '127.0.0.1', () => {
   void persistState(state).then(() => console.log(`Paseo Voice listening at ${publicUrl}. Run npm run link for a private launch link.`));
