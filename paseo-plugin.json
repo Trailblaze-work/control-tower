@@ -1,0 +1,7 @@
+{
+  "id": "paseo-voice",
+  "description": "Talk to a laptop-hosted coordinator about your Paseo workspaces.",
+  "requirements": {
+    "paseo": ">=0.11.2 <0.12.0"
+  }
+}

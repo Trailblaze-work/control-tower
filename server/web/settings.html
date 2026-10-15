@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Paseo Voice settings</title><link rel="stylesheet" href="./style.css"><script type="module" src="./settings.js"></script></head>
+<body><main>
+  <header><span class="brand">PASEO / VOICE</span><a href="/">Call page</a></header>
+  <h1>Voice settings</h1>
+  <p>Private controls on this laptop. Keys stay here and are never returned to the call page.</p>
+  <p id="settings-status" role="status" aria-live="polite">Loading settings…</p>
+  <form id="key-form">
+    <label for="api-key">OpenAI API key</label>
+    <input id="api-key" name="api-key" type="password" autocomplete="off" placeholder="sk-…" spellcheck="false">
+    <p>Leave blank to keep the current key. Changes apply to the next call; no service restart required.</p>
+    <details><summary>Provider-reported billing (optional)</summary>
+      <label for="admin-key">OpenAI Admin API key</label>
+      <input id="admin-key" name="admin-key" type="password" autocomplete="off" placeholder="sk-admin-…" spellcheck="false">
+      <label for="project-id">Project ID filter</label>
+      <input id="project-id" name="project-id" type="text" autocomplete="off" placeholder="proj_… (optional)" spellcheck="false">
+      <p>The Admin key reads organization costs. Without a project filter, totals include all applications in that organization. These figures can lag and use daily buckets.</p>
+    </details>
+    <button type="submit">Save settings</button>
+  </form>
+  <section aria-labelledby="spending-title"><h2 id="spending-title">Spending</h2>
+    <p id="estimate">Loading tracked usage…</p><p id="coverage"></p>
+    <p id="billed">Loading provider billing…</p>
+    <p>Live estimates use received token usage and published prices. They exclude earlier untracked calls, missing events, workspace-agent costs, taxes and discounts.</p>
+    <a href="https://platform.openai.com/usage" target="_blank" rel="noreferrer">Open OpenAI usage dashboard</a>
+    <p><button id="reload" class="secondary" type="button">Refresh spending</button></p>
+  </section>
+  <details><summary>Diagnostics</summary><p>No conversation text, keys or audio is logged.</p><button id="load-diagnostics" class="secondary" type="button">Load recent diagnostics</button><pre id="diagnostics-output"></pre></details>
+  <p id="settings-error" role="alert" hidden></p>
+</main></body></html>

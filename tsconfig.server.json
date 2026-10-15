@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "server/config.ts",
+    "server/auth.ts",
+    "server/paseo.ts",
+    "server/coordinator.ts",
+    "server/http.ts",
+    "server/main.ts",
+    "scripts/**/*.ts",
+    "tests/**/*.ts"
+  ]
+}

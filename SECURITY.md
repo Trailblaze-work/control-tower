@@ -1,0 +1,13 @@
+# Security
+
+This private prototype controls the signed-in user's Paseo installation. A shared call link is not a guest account: its holder can read workspace information, consult idle agents and relay routine messages using the owner's resources and billing. Do not publish links or share them with untrusted recipients. There is no per-user workspace isolation.
+
+Call links are single-use and expire after one minute. Browser pairing lasts 12 hours. The service validates Host/origin, uses HttpOnly SameSite cookies and isolates call/job ownership. The anonymous Cloudflare tunnel exposes the companion page, not the Paseo daemon or OpenAI key. Localhost calls avoid the tunnel.
+
+Key settings, provider billing and administrative diagnostics additionally require the local control credential and a localhost Host header. The credential is passed in the settings-link fragment and removed from browser history immediately; it is not persisted in browser storage. Reopen the settings link after reloading or restarting the service. These controls are not provided to the voice model. No browser endpoint returns saved keys. Settings changes affect new calls; existing calls retain their established provider session.
+
+Keys and runtime state are stored outside the checkout in `~/.paseo/voice/`, with directory mode 0700 and files 0600. These are permission-protected local files, not encrypted storage. Existing environment/key-file configuration remains supported. An optional Admin API key has broader billing privileges; use a dedicated project filter where practical. Provider billing totals can cover other applications and are not added to the plugin estimate.
+
+No raw audio is recorded locally. Recent transcript handoff is kept in tab sessionStorage for up to 12 hours; End call clears it. Message text/replies are retained in the private outbox for up to 24 hours. Diagnostic files contain only allow-listed event metadata, timings and classifications; usage files retain token counts/cost estimates without transcript text. Provider data policies still apply.
+
+Report vulnerabilities privately to the Trailblaze repository owners. Never include live credentials, launch links, cookies or unsanitized conversation dumps in an issue or commit. Rotate any exposed credentials.

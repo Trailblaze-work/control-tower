@@ -1,0 +1,54 @@
+{
+  "name": "paseo-voice",
+  "private": true,
+  "version": "0.0.0",
+  "files": [
+    "paseo-plugin.json",
+    "OVERVIEW.md",
+    "index.client.ts",
+    "index.client.tsx",
+    "index.server.ts",
+    "index.server.tsx",
+    "client/",
+    "server/",
+    "shared/",
+    "README.md",
+    "scripts/"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
+    "start": "node server/main.ts",
+    "test": "node --test tests/*.test.ts tests/*.test.mjs",
+    "check:web": "node --check server/web/app.js && node --check server/web/session-state.js && node --check server/web/settings.js",
+    "link": "node scripts/link.ts",
+    "serve": "node scripts/service.ts",
+    "service:install": "node scripts/install-service.ts",
+    "smoke:live": "node scripts/smoke.mjs",
+    "refresh": "node scripts/refresh.ts",
+    "settings": "node scripts/settings.ts",
+    "diagnostics": "node scripts/diagnostics.ts"
+  },
+  "devDependencies": {
+    "@getpaseo/plugin": "0.11.2",
+    "@tanstack/react-query": "^5.90.11",
+    "@types/node": "^24.19.2",
+    "@types/react": "~19.2.0",
+    "playwright": "^1.56.1",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@getpaseo/client": "0.11.2",
+    "zod": "^4.4.3"
+  },
+  "type": "module",
+  "description": "Laptop-hosted live voice coordinator for Paseo workspaces",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Trailblaze-work/paseo-voice.git"
+  }
+}
