@@ -157,7 +157,7 @@ Safari/iOS may suspend the page, end capture or require a playback/microphone ge
 | --- | --- |
 | `PASEO_VOICE_PORT` | `6768` (loopback only) |
 | `PASEO_VOICE_DAEMON_URL` | `ws://127.0.0.1:6767/ws` |
-| `PASEO_VOICE_MODEL` | JSON policy model: `gpt-realtime-2.1` |
+| `PASEO_VOICE_MODEL` | JSON policy model: `gpt-realtime-2.1-mini` |
 | `OPENAI_API_KEY` | Environment fallback when no key is saved in settings |
 | `PASEO_VOICE_KEY_FILE` | `~/.codex/secrets/openai_api_key` |
 | `CLOUDFLARED_BIN` | `/opt/homebrew/bin/cloudflared`; override on other installations |
