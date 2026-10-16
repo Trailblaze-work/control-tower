@@ -15,7 +15,7 @@ The Paseo sidebar opens a companion call page. Desktop calls use localhost; phon
 | Live conversation | Continuous speech, interruption, microphone mute, End call and resume/reconnect. |
 | Workspace-first answers | Discover relevant workspaces, read recent evidence and consult owning agents through one messaging path before relying on general knowledge. |
 | Concise delivery | Outcome-first answers; silent tool use; brief attribution and uncertainty. |
-| Queued coordination | Durable FIFO updates wait for idle agents, survive service restarts and can be cancelled before submission. |
+| Queued coordination | Workspace ID/name and agent ownership are verified before enqueue and delivery. Durable FIFO updates wait for idle agents; visible receipts distinguish local queueing, accepted submission and received replies. |
 | PR lookup | Attached PR numbers/URLs, workspace/worktree names, branches, paths and associated agents, with cache qualifiers. |
 | Workspace changes | Voice display-title renames when enabled by the owner; reviewable creation proposals completed in Paseo. |
 | Prompt refresh | Apply instructions between turns; preserve bounded text context and pending jobs when reconnecting. |
@@ -114,6 +114,12 @@ launchctl bootout gui/$(id -u) "$HOME/Library/LaunchAgents/dev.paseo.voice.plist
 ```
 
 Prompt updates need no app restart. Backend code updates require app-only refresh; supervisor/startup changes require a full restart. Older call pages need reloading to acquire new browser code. A full anonymous tunnel replacement needs a fresh sidebar link, because cookies/storage cannot migrate between hostnames. A stable named tunnel is the fallback for a persistent origin. Reconnection restores text context, not exact audio/internal model state; iOS may require another microphone/playback tap.
+
+## Message routing and delivery
+
+Messages target a discovered workspace by stable ID and exact display name; an optional agent ID must belong to it. The overview lists agents inside their workspaces, and a rename preserves the workspace ID. Names and ownership are revalidated before enqueue; agent ownership is checked again before dispatch. Ambiguous or mismatched targets are rejected without a job receipt.
+
+“Queued” means saved locally, not delivered. Busy agents and pending permission prompts hold delivery without interruption. “Accepted” confirms submission, while “completed” means a correlated reply was received, not that all requested work succeeded. The browser shows delivery receipts independently of the voice response. Retry by checking the existing job; identical pending messages reuse their job rather than submitting twice. Restarts preserve bound queues and observation of accepted work; legacy unsent queues without workspace bindings are cancelled safely instead of risking delivery to the wrong workspace. Nothing is automatically retargeted or replayed.
 
 ## Troubleshooting and diagnostics
 

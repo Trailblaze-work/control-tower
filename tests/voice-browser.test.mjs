@@ -21,7 +21,7 @@ test('browser preserves audio capture and context across reception loss, updates
   const server = voiceServer({
     report: entry => diagnostics.push(entry),
     port, publicUrl: origin, controlToken: 'test-control', apiKey: 'test-key', ready: () => true,
-    coordinator: { invoke: async (_call, _id, name, args) => name === 'send_message' ? { jobId: 'slow-job', status: 'accepted' } : name === 'get_job' ? { status: jobState, reply: jobState === 'completed' ? 'The requested change is complete.' : undefined } : name === 'request_workspace_rename' && args.title === 'Applied title' ? { status: 'completed', kind: 'workspace_rename', executed: true, workspaceId: 'w', title: 'Applied title' } : name === 'request_workspace_rename' ? {
+    coordinator: { invoke: async (_call, _id, name, args) => name === 'send_message' ? { jobId: 'slow-job', status: 'queued', workspaceName: 'Build', note: 'Not submitted: the workspace agent is busy.' } : name === 'get_job' ? { status: jobState, reply: jobState === 'completed' ? 'The requested change is complete.' : undefined } : name === 'request_workspace_rename' && args.title === 'Applied title' ? { status: 'completed', kind: 'workspace_rename', executed: true, workspaceId: 'w', title: 'Applied title' } : name === 'request_workspace_rename' ? {
       status: 'requires_user_action', executed: false, kind: 'workspace_rename', workspaceId: 'w', requestedTitle: '<img src=x onerror=alert(1)>',
       sdkPlan: { method: 'workspaces.ref(workspaceId).setTitle', workspaceId: 'w', title: '<img src=x onerror=alert(1)>' },
       manualSteps: ['Review the workspace title in Paseo.'], risks: ['Display title only.'],
@@ -126,11 +126,13 @@ test('browser preserves audio capture and context across reception loss, updates
   assert.equal(await page.locator('#workspace-request-list li').count(), 1, 'success replaces the obsolete pending rename card');
   await page.evaluate(() => window.channels.at(-1).emit({ type: 'response.function_call_arguments.done', call_id: 'slow-request', name: 'send_message', arguments: '{}' }));
   await page.waitForFunction(() => window.sentEvents.some(e => e.item?.call_id === 'slow-request'));
+  assert.match(await page.locator('#transcript').textContent(), /Build: Queued locally; not delivered/);
   await page.clock.runFor(8001);
   await page.waitForTimeout(50);
   assert.equal(await page.evaluate(() => window.sentEvents.some(e => e.item?.content?.[0]?.text?.includes('BACKGROUND TOOL EVIDENCE'))), false, 'pending observation never produces a false failure announcement');
   jobState = 'completed'; await page.clock.runFor(8001);
   await page.waitForFunction(() => window.sentEvents.some(e => e.item?.content?.[0]?.text?.includes('The requested change is complete.')));
+  assert.match(await page.locator('#transcript').textContent(), /Reply received/);
   await page.route('**/api/tool', async route => {
     if (route.request().postDataJSON().invocationId !== 'lost-call') return route.continue();
     return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Call session lost. Refresh conversation to reconnect with saved context.', requestId: 'safe-diagnostic-reference' }) });

@@ -33,6 +33,7 @@ const assistantMessages = new Map();
 const userMessages = new Map();
 const handledTools = new Set();
 const pendingJobs = new Map();
+const messageReceipts = new Map();
 const speaker = $('speaker');
 function checkpoint() {
   try { sessionStorage.setItem(checkpointKey, JSON.stringify({ savedAt: Date.now(), history: history.slice(-40), jobs: [...pendingJobs], callId })); } catch { /* Storage can be unavailable in private/restricted browser sessions. */ }
@@ -54,6 +55,16 @@ function line(role, text) {
   item.append(label, content); $('transcript').append(item);
   while ($('transcript').children.length > 100) $('transcript').firstChild.remove();
   return content;
+}
+function showMessageReceipt(result) {
+  const jobId = result.jobId ?? result.id;
+  if (!jobId) return;
+  const states = { queued: 'Queued locally; not delivered', submitting: 'Submission in progress', accepted: 'Submission accepted; awaiting reply', waiting: 'Submission accepted; reply still pending', completed: 'Reply received', cancelled: 'Queued request cancelled', expired: 'Queue expired; not delivered', unknown: 'Outcome uncertain; check before retrying', error: 'Delivery failed', permission: 'Permission required' };
+  const state = states[result.status]; if (!state) return;
+  let node = messageReceipts.get(jobId);
+  if (!node?.isConnected) { node = line('Delivery', ''); messageReceipts.set(jobId, node); }
+  node.dataset.workspaceName = result.workspaceName ?? node.dataset.workspaceName ?? 'Workspace';
+  node.textContent = `${node.dataset.workspaceName}: ${state}.${result.note ? ` ${result.note}` : ''}`;
 }
 function showWorkspaceRequest(result) {
   if (result.kind === 'workspace_rename' && result.status === 'completed') {
@@ -329,6 +340,10 @@ function acceptEvent(event, version) {
         result = await api('tool', { callId, invocationId: event.call_id, name: event.name, args: JSON.parse(event.arguments) });
         if (version !== generation) return;
         showWorkspaceRequest(result);
+        if (event.name === 'send_message') {
+          showMessageReceipt(result);
+          if (result.error) line('Delivery', `Not queued: ${result.error}`);
+        }
         if (result.jobId) { pendingJobs.set(result.jobId, Date.now()); checkpoint(); }
       } catch (cause) { result = { error: cause.message, code: cause.code ?? 'network', requestId: cause.requestId, instruction: 'Report the actual limitation concisely. Do not claim every failure is a network failure. If a call handle was lost, ask the user to tap Refresh conversation. Do not assume a message succeeded or blindly resend it.' }; }
       if (version !== generation) return;
@@ -344,6 +359,7 @@ async function pollJobs(version) {
     try {
       const result = await api('tool', { callId, invocationId: `poll-${jobId}-${Date.now()}`, name: 'get_job', args: { jobId } });
       if (version !== generation) return;
+      showMessageReceipt({ ...result, jobId });
       if (pendingStatuses.has(result.status)) continue;
       pendingJobs.delete(jobId);
       checkpoint();

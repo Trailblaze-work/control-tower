@@ -62,7 +62,7 @@ export async function directory(paseo: PaseoApi, report: Reporter = silent) {
     workspaces.push(...page.entries.map(workspaceSummary));
     cursor = page.pageInfo.hasMore ? page.pageInfo.nextCursor ?? undefined : undefined;
   } while (cursor);
-  return { observedAt: new Date().toISOString(), agents, workspaces,
+  return { observedAt: new Date().toISOString(), agents, workspaces: workspaces.map(workspace => ({ ...workspace, agents: agents.filter(agent => agent.workspaceId === workspace.id) })),
     prMappings: workspaces.filter(w => w.pullRequest).map(w => ({
       workspaceId: w.id, workspaceName: w.name, worktreeName: w.worktreeName, project: w.project,
       pullRequest: w.pullRequest, agentIds: agents.filter(a => a.workspaceId === w.id).map(a => a.id),
