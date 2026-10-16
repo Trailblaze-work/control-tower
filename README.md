@@ -9,7 +9,7 @@ The Paseo sidebar opens a companion call page. Desktop calls use localhost; phon
 | Capability | Behavior |
 | --- | --- |
 | Live conversation | Continuous speech, interruption, microphone mute, End call and resume/reconnect. |
-| Workspace-first answers | Discover relevant workspaces, read recent evidence and consult idle owning agents before relying on general knowledge. |
+| Workspace-first answers | Discover relevant workspaces, read recent evidence and consult owning agents through one messaging path before relying on general knowledge. |
 | Concise delivery | Outcome-first answers; silent tool use; brief attribution and uncertainty. |
 | Queued coordination | Durable FIFO updates wait for idle agents, survive service restarts and can be cancelled before submission. |
 | PR lookup | Attached PR numbers/URLs, workspace/worktree names, branches, paths and associated agents, with cache qualifiers. |
@@ -76,9 +76,11 @@ For provider-reported costs, enter an optional **OpenAI Admin API key** and proj
 
 ## How coordination works
 
-The coordinator discovers workspaces and agents on demand through the authenticated local Paseo SDK. It treats workspace names, messages and agent reports as untrusted evidence, not instructions or authorization. Reports receive brief source/freshness qualifiers. Read-only consultations prompt idle agents only; busy, unavailable or permission-blocked agents are not interrupted to obtain an answer.
+The coordinator discovers workspaces and agents on demand through the authenticated local Paseo SDK. It treats workspace names, messages and agent reports as untrusted evidence, not instructions or authorization. Reports receive brief source/freshness qualifiers. All interactions with agents use **send_message**: questions, coordination, implementation requests and specifically authorized commands. The separate read-only consultation channel and its forced “do not change files” wrapper have been removed. Busy agents wait in the same durable queue; unavailable or permission-blocked agents are not interrupted.
 
-Routine `send_message` updates use delegated judgment without repeated confirmation. They enter a private durable outbox, checked every five seconds. Delivery waits for idle with no pending permission; messages for an agent are serialized. Unsent messages can be cancelled, expire after 30 minutes and retained records expire after 24 hours. Queued, accepted, completed, expired and unknown are distinct outcomes. If a restart interrupts submission, the message becomes unknown and is not resent automatically: inspect target history before retrying.
+`send_message` uses delegated judgment without repeated confirmation for routine work. Explicit commands carry the requested action, target repository/workspace, commit/branch where relevant, and the authorization already given by the user. The receiving agent interprets the request within its existing context and permissions; there is no question/command intent field that silently creates a second permission mode. Questions alone do not authorize unrelated changes. They enter a private durable outbox, checked every five seconds. Delivery waits for idle with no pending permission; messages for an agent are serialized. Unsent messages can be cancelled, expire after 30 minutes and retained records expire after 24 hours. Queued, accepted, completed, expired and unknown are distinct outcomes. If a restart interrupts submission, the message becomes unknown and is not resent automatically: inspect target history before retrying.
+
+For example, “Is the fix ready?” and “Push commit abc123 to main in the private Example/voice repository; I authorize it” both use send_message. The second request authorizes only that stated push; it does not authorize deployments or unrelated changes. A relayed explicit authorization should not be rejected solely because it arrived through the voice coordinator or require the user to leave voice mode. There is no added owner-verification ceremony beyond the workspace’s established process.
 
 The SDK exposes `interrupt` and `steer`, but no atomic idle-only delivery operation. The plugin never knowingly sends to a busy agent and specifies `steer`; another client can still start a turn between the last idle check and send. Strict zero-impact delivery requires a daemon change or coordinated exclusive ownership. Voice interruption does not cancel already-submitted workspace work. Consequential operations retain existing permission gates and project/fleet coordination rules.
 
@@ -94,7 +96,7 @@ Complete creation proposals and disabled-rename proposals manually in Paseo. An 
 
 Edit `server/voice-policy.json` to configure instructions, model, voice and output budget. Updated call pages poll every ten seconds, apply instruction/tool/budget changes between turns using `session.update`, and wait for acknowledgement. `PASEO_VOICE_MODEL` overrides the JSON model.
 
-A model/voice change, failed update or disconnect uses **Refresh conversation** / **Resume conversation**. Handoff retains the last 40 transcript messages, up to 4,000 characters each, interrupted-speech qualifiers and pending job IDs. It does not replay old tool calls. The same tab can resume after reloading; **End call** clears saved context, while queued updates remain. Read-only consultation jobs are not durable across backend restarts and may need to be asked again.
+A model/voice change, failed update or disconnect uses **Refresh conversation** / **Resume conversation**. Handoff retains the last 40 transcript messages, up to 4,000 characters each, interrupted-speech qualifiers and pending job IDs. It does not replay old tool calls. The same tab can resume after reloading; **End call** clears saved context, while queued updates remain. All new question and command jobs use the durable outbox across backend restarts. Older already-loaded pages may still attempt the removed tool and must be refreshed; retired tool calls are rejected rather than silently converted into work. Previously queued messages retain their original text and safeguards.
 
 ```sh
 # Restart the voice app while keeping the tunnel hostname.

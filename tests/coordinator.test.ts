@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PaseoApi } from '@getpaseo/client';
-import { Coordinator, conversation, recordUtterance } from '../server/coordinator.ts';
+import { Coordinator, conversation, recordUtterance, tools } from '../server/coordinator.ts';
 import { Access } from '../server/auth.ts';
 
 function fixture(allowRenames: () => Promise<boolean> = async () => false) {
@@ -47,7 +47,9 @@ test('routine messages send directly without confirmation and retries do not dup
   assert.equal(sent.length, 1);
   assert.match(sent[0].text, /Please summarize the agreed next steps/);
   assert.match(sent[0].text, /Keep existing permission gates/);
-  assert.match(sent[0].text, /separately and specifically authorized/);
+  assert.match(sent[0].text, /require specific user authorization/);
+  assert.ok(!sent[0].text.includes('Do not change files'));
+  assert.match(sent[0].text, /not inherently read-only/);
   assert.deepEqual(sent[0].options, { messageId: result.jobId, activeTurnBehavior: 'steer' });
   assert.deepEqual(await coordinator.invoke(call, 'send', 'send_message', { agentId: 'billing', message: 'Please summarize the agreed next steps.' }), result);
   assert.equal(sent.length, 1);
@@ -57,7 +59,6 @@ test('workspace discovery is required before reading or messaging an agent', asy
   const { coordinator, call, sent } = fixture();
   for (const [name, args] of [
     ['get_activity', { agentId: 'a' }],
-    ['ask_agent', { agentId: 'a', question: 'What is blocked?' }],
     ['send_message', { agentId: 'a', message: 'Please summarize the plan.' }],
   ] as const) {
     const result = await coordinator.invoke(call, name, name, args) as { error: string };
@@ -66,32 +67,33 @@ test('workspace discovery is required before reading or messaging an agent', asy
   assert.equal(sent.length, 0);
   const overview = await coordinator.invoke(call, 'overview', 'get_overview', {}) as { agents: { id: string }[] };
   assert.deepEqual(overview.agents.map(agent => agent.id), ['a']);
-  const job = await coordinator.invoke(call, 'after-discovery', 'ask_agent', { agentId: 'a', question: 'What is blocked?' }) as { jobId: string };
+  const job = await coordinator.invoke(call, 'after-discovery', 'send_message', { agentId: 'a', message: 'What is blocked?' }) as { jobId: string };
   assert.ok(job.jobId);
   assert.equal(sent.length, 1);
 });
 
-test('busy agents are not prompted and question retries are idempotent', async () => {
+test('questions use the same durable messaging path, wait for busy agents and deduplicate retries', async () => {
   const idle = fixture(); idle.call.knownAgents.add('a');
-  const result = await idle.coordinator.invoke(idle.call, 'question', 'ask_agent', { agentId: 'a', question: 'What is blocked?' });
-  await idle.coordinator.invoke(idle.call, 'question', 'ask_agent', { agentId: 'a', question: 'What is blocked?' });
+  const result = await idle.coordinator.invoke(idle.call, 'question', 'send_message', { agentId: 'a', message: 'What is blocked?' });
+  await idle.coordinator.invoke(idle.call, 'question', 'send_message', { agentId: 'a', message: 'What is blocked?' });
   assert.equal(idle.sent.length, 1);
-  assert.match(idle.sent[0].text, /Do not change files/);
+  assert.ok(!idle.sent[0].text.includes('Do not change files'));
+  assert.match(idle.sent[0].text, /What is blocked/);
   assert.ok((result as { jobId: string }).jobId);
   const busy = fixture(); busy.call.knownAgents.add('a'); busy.busy();
-  assert.deepEqual(await busy.coordinator.invoke(busy.call, 'q', 'ask_agent', { agentId: 'a', question: 'Why?' }), { status: 'busy', agentId: 'a', instruction: 'Do not interrupt. Use history or ask again when idle.' });
+  assert.equal((await busy.coordinator.invoke(busy.call, 'q', 'send_message', { agentId: 'a', message: 'Why?' }) as { status: string }).status, 'queued');
   assert.equal(busy.sent.length, 0);
   const refusedMessage = await busy.coordinator.invoke(busy.call, 'relay', 'send_message', { agentId: 'a', message: 'Please summarize the plan.' }) as { status: string };
   assert.equal(refusedMessage.status, 'queued');
   assert.equal(busy.sent.length, 0);
 });
 
-test('tool arguments are validated and jobs remain isolated between calls', async () => {
+test('tool arguments are validated and message jobs remain isolated between browser owners', async () => {
   const { coordinator, call, sent } = fixture();
   call.knownAgents.add('a');
-  const invalid = await coordinator.invoke(call, 'bad', 'ask_agent', { agentId: 'a', question: 'Why?', shell: 'anything' }) as { error: string };
+  const invalid = await coordinator.invoke(call, 'bad', 'send_message', { agentId: 'a', message: 'Why?', shell: 'anything' }) as { error: string };
   assert.equal(invalid.error, 'Invalid tool arguments');
-  const job = await coordinator.invoke(call, 'q', 'ask_agent', { agentId: 'a', question: 'Why?' }) as { jobId: string };
+  const job = await coordinator.invoke(call, 'q', 'send_message', { agentId: 'a', message: 'Why?' }) as { jobId: string };
   const other = conversation('other');
   assert.deepEqual(await coordinator.invoke(other, 'read', 'get_job', { jobId: job.jobId }), { error: 'Unknown job' });
   assert.equal(sent.length, 1);
@@ -157,4 +159,18 @@ test('workspace RPC failures keep a specific safe cause and diagnostic reference
   assert.equal(result.code, 'timeout'); assert.ok(result.requestId);
   assert.ok(!JSON.stringify({ result, events }).includes('private-value'));
   assert.match(JSON.stringify(events), /agents_list/);
+});
+
+
+test('authorized commands share the question path without removing action-specific safeguards', async () => {
+  const { coordinator, call, sent } = fixture(); call.knownAgents.add('a');
+  const message = 'The user explicitly authorizes pushing commit abc123 to main in the private Example/voice repo.';
+  const result = await coordinator.invoke(call, 'authorized-command', 'send_message', { agentId: 'a', message }) as { jobId: string };
+  assert.ok(result.jobId); assert.equal(sent.length, 1); assert.ok(sent[0].text.includes(message));
+  assert.match(sent[0].text, /apply it within that stated scope/);
+  assert.match(sent[0].text, /external publishing and secret access require specific user authorization/);
+  assert.ok(!sent[0].text.includes('Do not change files'));
+  assert.equal(new Set<string>(tools.map(tool => tool.name)).has('ask_agent'), false);
+  assert.deepEqual(await coordinator.invoke(call, 'retired-tool', 'ask_agent', { agentId: 'a', question: 'Legacy request' }), { error: 'Unknown tool' });
+  assert.equal(sent.length, 1, 'retired tool calls are never silently converted into work');
 });

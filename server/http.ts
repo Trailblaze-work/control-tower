@@ -122,7 +122,7 @@ export function voiceServer(options: ServerOptions) {
         }
         if (req.method === 'GET' && path === '/api/billing' && options.settings) { json(res, 200, await options.settings.billed(providerFetch)); return; }
         if (req.method === 'GET' && path === '/api/diagnostics') {
-          json(res, 200, { ...options.telemetry?.snapshot(), connection: options.connection?.(), calls: [...calls.values()].map(c => ({ ageSeconds: Math.round((Date.now()-c.createdAt)/1000), lastSeenSeconds: Math.round((Date.now()-c.lastSeen)/1000), utterances: c.transcriptIndex, jobs: c.jobs.size })) }); return;
+          json(res, 200, { ...options.telemetry?.snapshot(), connection: options.connection?.(), calls: [...calls.values()].map(c => ({ ageSeconds: Math.round((Date.now()-c.createdAt)/1000), lastSeenSeconds: Math.round((Date.now()-c.lastSeen)/1000), utterances: c.transcriptIndex })) }); return;
         }
       }
       const owner = access.valid(req.headers.cookie);
