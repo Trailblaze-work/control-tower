@@ -12,7 +12,7 @@ The Paseo sidebar opens a companion call page. Desktop calls use localhost; phon
 
 | Capability | Behavior |
 | --- | --- |
-| Live conversation | Continuous speech, interruption, microphone mute, End call and resume/reconnect. |
+| Live conversation | Continuous speech, interruption, microphone picker and active-input indicator, mute, End call and resume/reconnect. |
 | Workspace-first answers | Discover relevant workspaces, read recent evidence and consult owning agents through one messaging path before relying on general knowledge. |
 | Concise delivery | Outcome-first answers; silent tool use; brief attribution and uncertainty. |
 | Queued coordination | Workspace ID/name and agent ownership are verified before enqueue and delivery. Durable FIFO updates wait for idle agents; visible receipts distinguish local queueing, accepted submission and received replies. |
@@ -49,6 +49,12 @@ npm run link
 Open the link on your phone in Safari, allow microphone access and tap **Start conversation**. On the laptop, use the local link in the Paseo sidebar. You can interrupt the coordinator while it speaks. **Mute** disables microphone capture; **End call** stops the conversation. Closing the page disconnects its WebRTC transport, although already-submitted workspace work and queued updates may continue.
 
 Install this checkout as a local directory plugin through [Paseo’s plugin settings](https://paseo.sh/docs/plugins), then open **Control Tower** in the sidebar. Enabling the global plugin switch is an explicit user action; automated setup must obtain authorization first. The sidebar refreshes used links within about three seconds and unused links every 45 seconds. Links are single-use, expire after one minute and establish 12-hour browser pairing.
+
+### Choose a microphone
+
+The call page shows a **Microphone** picker before starting and the active input once capture begins. System default remains the initial choice. Browsers may hide device names until microphone permission is granted; the list refreshes after capture and when devices change.
+
+Choose another input during a call to replace the outgoing audio track without restarting the conversation. Mute is preserved, and the old capture is released only after successful replacement. If capture or track replacement fails, the current input stays selected. Device IDs and names remain in the browser; switch diagnostics contain only completion/failure metadata. iOS, Bluetooth and CarPlay may expose fewer selectable inputs than the operating system, so verify those routes on the device. A system-ended microphone still requires an explicit resume; this picker does not automatically reopen it.
 
 ### Configure your API key
 

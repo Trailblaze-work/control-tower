@@ -40,12 +40,19 @@ test('browser preserves audio capture and context across reception loss, updates
       setActionHandler(action, callback) { if (action === 'hangup' && window.rejectHangup) throw new DOMException('Unsupported', 'NotSupportedError'); window.systemActions[action] = callback; },
       setMicrophoneActive(active) { this.microphoneActive = active; }, playbackState: 'none', metadata: null,
     } });
-    function microphone() {
-      const track = Object.assign(new EventTarget(), { enabled: true, muted: false, readyState: 'live', label: 'Silent synthetic microphone', stop() { this.readyState = 'ended'; window.microphoneStops++; } });
-      window.microphoneTrack = track; return track;
+    window.microphoneTracks = [];
+    window.availableMicrophones = [{ kind: 'audioinput', deviceId: 'default', label: 'Built-in microphone' }, { kind: 'audioinput', deviceId: 'built-in', label: 'Built-in microphone' }, { kind: 'audioinput', deviceId: 'usb', label: 'USB microphone' }];
+    navigator.mediaDevices.enumerateDevices = async () => window.availableMicrophones.map(device => ({ ...device, label: window.microphoneRequests ? device.label : '' }));
+    function microphone(deviceId) {
+      const label = window.availableMicrophones.find(device => device.deviceId === deviceId)?.label || 'Built-in microphone';
+      const track = Object.assign(new EventTarget(), { kind: 'audio', enabled: true, muted: false, readyState: 'live', label, stop() { if (this.readyState !== 'ended') { this.readyState = 'ended'; window.microphoneStops++; } } });
+      window.microphoneTrack = track; window.microphoneTracks.push(track); return track;
     }
-    let track = microphone();
-    navigator.mediaDevices.getUserMedia = async () => { window.microphoneRequests++; if (track.readyState === 'ended') track = microphone(); return { getAudioTracks: () => [track], getTracks: () => [track] }; };
+    navigator.mediaDevices.getUserMedia = async constraints => {
+      window.microphoneRequests++; const deviceId = constraints.audio.deviceId?.exact || 'default'; window.requestedMicrophone = deviceId;
+      if (window.rejectMicrophone === deviceId) throw new DOMException('Synthetic access denied', 'NotAllowedError');
+      const track = microphone(deviceId); return { getAudioTracks: () => [track], getTracks: () => [track] };
+    };
     Object.defineProperty(navigator, 'audioSession', { value: Object.assign(new EventTarget(), { state: 'active', type: 'auto' }) });
     class Channel {
       readyState = 'connecting';
@@ -69,7 +76,9 @@ test('browser preserves audio capture and context across reception loss, updates
       constructor() { window.peers.push(this); }
       connectionState = 'new'; localDescription = { sdp: 'v=0\r\ns=synthetic-offer' };
       createDataChannel() { this.channel = new Channel(); window.channels.push(this.channel); return this.channel; }
-      addTrack() {} async createOffer() { return this.localDescription; } async setLocalDescription() {}
+      addTrack(track) { this.sender = { track, replaceTrack: async next => { if (window.rejectReplacement) throw new DOMException('Synthetic replacement failure', 'InvalidModificationError'); this.sender.track = next; } }; }
+      getSenders() { return [this.sender]; }
+      async createOffer() { return this.localDescription; } async setLocalDescription() {}
       async setRemoteDescription() { this.connectionState = 'connected'; this.onconnectionstatechange?.(); this.channel.readyState = 'open'; this.channel.onopen?.(); }
       close() { this.connectionState = 'closed'; this.channel.close(); this.onconnectionstatechange?.(); }
     };
@@ -234,6 +243,43 @@ test('browser preserves audio capture and context across reception loss, updates
   await page.waitForFunction(() => window.peers.length === 4 && window.peers.at(-1).connectionState === 'connected');
   await page.getByRole('button', { name: 'End call', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: 'Start conversation', exact: true }).isVisible(), true);
+
+  const micPage = await context.newPage(); await micPage.goto(origin);
+  await micPage.getByRole('button', { name: 'Start conversation', exact: true }).waitFor();
+  assert.equal(await micPage.getByLabel('Microphone', { exact: true }).isVisible(), true);
+  assert.equal(await micPage.evaluate(() => window.microphoneRequests), 0, 'listing microphones does not open capture');
+  await micPage.getByLabel('Microphone', { exact: true }).selectOption('usb');
+  assert.equal(await micPage.evaluate(() => window.microphoneRequests), 0, 'preselecting an input does not open capture');
+  await micPage.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await micPage.waitForFunction(() => document.querySelector('#microphone-status').textContent.includes('Using: USB microphone'));
+  await micPage.getByRole('button', { name: 'Mute microphone', exact: true }).click();
+  await micPage.getByLabel('Microphone', { exact: true }).selectOption('built-in');
+  await micPage.waitForFunction(() => document.querySelector('#microphone-status').textContent.includes('Using: Built-in microphone'));
+  assert.equal(await micPage.evaluate(() => window.peers.length), 1, 'switching preserves the existing call');
+  assert.equal(await micPage.evaluate(() => window.peers[0].sender.track.enabled), false, 'switching preserves mute');
+  assert.equal(await micPage.evaluate(() => window.microphoneTracks[0].readyState), 'ended', 'the replaced microphone is released');
+  await micPage.evaluate(() => { window.rejectMicrophone = 'usb'; });
+  await micPage.getByLabel('Microphone', { exact: true }).selectOption('usb');
+  await micPage.waitForFunction(() => document.querySelector('#error').textContent.includes('Could not switch microphones'));
+  assert.equal(await micPage.getByLabel('Microphone', { exact: true }).inputValue(), 'built-in');
+  assert.equal(await micPage.evaluate(() => window.peers[0].sender.track.readyState), 'live', 'permission failure leaves the current microphone working');
+  await micPage.evaluate(() => { window.rejectMicrophone = undefined; window.rejectReplacement = true; });
+  await micPage.getByLabel('Microphone', { exact: true }).selectOption('usb');
+  await micPage.waitForFunction(() => !document.querySelector('#microphone').disabled);
+  assert.equal(await micPage.evaluate(() => window.microphoneTracks.at(-1).readyState), 'ended', 'failed replacement releases the candidate capture');
+  assert.equal(await micPage.evaluate(() => window.peers[0].sender.track.readyState), 'live');
+  await micPage.evaluate(() => {
+    window.rejectReplacement = false;
+    const original = navigator.mediaDevices.getUserMedia;
+    navigator.mediaDevices.getUserMedia = async constraints => { const captured = await original(constraints); await new Promise(resolve => { window.releaseCapture = resolve; }); return captured; };
+  });
+  await micPage.getByLabel('Microphone', { exact: true }).selectOption('usb');
+  await micPage.waitForFunction(() => typeof window.releaseCapture === 'function');
+  await micPage.getByRole('button', { name: 'End call', exact: true }).click();
+  await micPage.evaluate(() => window.releaseCapture());
+  await micPage.waitForFunction(() => window.microphoneTracks.every(track => track.readyState === 'ended'));
+  assert.equal(await micPage.getByRole('button', { name: 'Start conversation', exact: true }).isVisible(), true, 'ending during an input switch never resurrects the call');
+  await micPage.close();
 });
 
 test('laptop settings save write-only keys, display measured usage, and reject shared-call access', { timeout: 30000 }, async t => {
