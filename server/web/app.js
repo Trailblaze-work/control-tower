@@ -191,17 +191,26 @@ const watchedCaptureTracks = new WeakSet();
 function microphoneConstraints(deviceId) {
   return { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) }, video: false };
 }
+function microphoneLabel(label) {
+  return label.replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, '').replace(/\s+microphone\b/i, '').trim() || label;
+}
 function renderMicrophones() {
   const select = $('microphone'); select.replaceChildren();
   const add = (value, label) => { const option = document.createElement('option'); option.value = value; option.textContent = label; select.append(option); };
-  const defaultLabel = microphones.find(device => device.deviceId === 'default')?.label;
-  add('', defaultLabel ? `System default — ${defaultLabel}` : 'System default');
-  microphones.filter(device => device.deviceId && device.deviceId !== 'default').forEach((device, index) => add(device.deviceId, device.label || `Microphone ${index + 1}`));
+  const defaultLabel = microphones.find(device => device.deviceId === 'default')?.label.replace(/^default\s*[-–—:]\s*/i, '');
+  add('', 'System default');
+  const devices = microphones.filter(device => device.deviceId && device.deviceId !== 'default');
+  devices.forEach((device, index) => {
+    const label = device.label ? microphoneLabel(device.label) : `Microphone ${index + 1}`;
+    // Preserve distinguishable names when compact labels collide.
+    const duplicate = devices.some(other => other !== device && other.label && microphoneLabel(other.label) === label);
+    add(device.deviceId, duplicate ? `${label} (${index + 1})` : label);
+  });
   if (selectedMicrophone && ![...select.options].some(option => option.value === selectedMicrophone)) add(selectedMicrophone, 'Selected microphone (not currently listed)');
   select.value = selectedMicrophone;
   select.disabled = switchingMicrophone || phase === 'connecting' || (callWanted && phase !== 'connected') || !navigator.mediaDevices?.enumerateDevices;
   const track = stream?.getAudioTracks().find(track => track.readyState === 'live');
-  $('microphone-status').textContent = switchingMicrophone ? 'Switching microphone…' : track ? `Using: ${track.label || 'Browser-selected microphone'}${muted ? ' · muted' : ''}` : selectedMicrophone ? `Selected: ${microphones.find(device => device.deviceId === selectedMicrophone)?.label || 'Microphone'} · used when you start` : defaultLabel ? `Selected: System default — ${defaultLabel}` : 'System default · device name available after microphone access.';
+  $('microphone-status').textContent = switchingMicrophone ? 'Switching microphone…' : track ? `Using: ${track.label || 'Browser-selected microphone'}${muted ? ' · muted' : ''}` : selectedMicrophone ? `Selected: ${microphones.find(device => device.deviceId === selectedMicrophone)?.label || 'Microphone'} · used when you start` : defaultLabel ? `Default: ${defaultLabel}` : 'Device name available after microphone access.';
 }
 async function refreshMicrophones() {
   try { microphones = (await navigator.mediaDevices?.enumerateDevices?.() ?? []).filter(device => device.kind === 'audioinput'); }
