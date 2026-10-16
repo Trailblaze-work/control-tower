@@ -8,3 +8,12 @@ node_modules/
 evidence/
 playwright-report/
 test-results/
+secrets/
+.secrets/
+*.pem
+*.key
+settings.json
+state.json
+browser-sessions.json
+outbox.json
+usage.json

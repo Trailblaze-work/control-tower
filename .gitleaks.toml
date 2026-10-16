@@ -1,0 +1,15 @@
+title = "Control Tower secret detection"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "control-tower-private-link"
+description = "Private Control Tower call or settings link"
+regex = '''https?://[a-zA-Z0-9.:\[\]-]+/(?:embed|settings)?#[a-zA-Z0-9_-]{32,}'''
+
+[[rules]]
+id = "control-tower-session-cookie"
+description = "Control Tower browser session credential"
+regex = '''paseo_voice\s*=\s*([a-zA-Z0-9_-]{32,})'''
+secretGroup = 1

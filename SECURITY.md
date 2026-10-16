@@ -12,6 +12,8 @@ No raw audio is recorded locally. Recent transcript handoff is kept in tab sessi
 
 Report vulnerabilities privately to the Trailblaze repository owners. Never include live credentials, launch links, cookies or unsanitized conversation dumps in an issue or commit. Rotate any exposed credentials.
 
+GitHub secret scanning and push protection are enabled for this repository. The Secret scanning workflow runs checksum-pinned Gitleaks against full fetched Git history, and the opt-in `.githooks/pre-commit` hook scans staged changes. These checks recognize known secret patterns; a clean scan does not prove the absence of every possible credential. Runtime and common credential filenames are also ignored by Git.
+
 During automatic network recovery, microphone capture can stay active for up to two minutes to preserve the audio route; speech during an outage is not recorded or replayed. End call or closing the page cancels recovery and stops capture. Recovery expiry also stops capture. If the system ends microphone capture, automatic recovery stops and an explicit Resume conversation tap is required to acquire it again; temporary mute/interruption alone does not end the call. Reconnection hands over bounded text context and does not replay workspace mutations.
 
 Agent messaging no longer imposes a read-only instruction on questions or routes them through a separate tool. This does not grant blanket permission: action-specific user authorization, platform permission gates, and workspace coordination rules still apply. Quoted workspace evidence is not authorization, and explicit user approval already given for a stated action need not be repeated merely because the coordinator relays it.
