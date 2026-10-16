@@ -40,8 +40,13 @@ test('browser preserves audio capture and context across reception loss, updates
       setActionHandler(action, callback) { if (action === 'hangup' && window.rejectHangup) throw new DOMException('Unsupported', 'NotSupportedError'); window.systemActions[action] = callback; },
       setMicrophoneActive(active) { this.microphoneActive = active; }, playbackState: 'none', metadata: null,
     } });
-    let track = { enabled: true, readyState: 'live', label: 'Silent synthetic microphone', stop() { this.readyState = 'ended'; window.microphoneStops++; } };
-    navigator.mediaDevices.getUserMedia = async () => { window.microphoneRequests++; if (track.readyState === 'ended') track = { ...track, enabled: true, readyState: 'live' }; return { getAudioTracks: () => [track], getTracks: () => [track] }; };
+    function microphone() {
+      const track = Object.assign(new EventTarget(), { enabled: true, muted: false, readyState: 'live', label: 'Silent synthetic microphone', stop() { this.readyState = 'ended'; window.microphoneStops++; } });
+      window.microphoneTrack = track; return track;
+    }
+    let track = microphone();
+    navigator.mediaDevices.getUserMedia = async () => { window.microphoneRequests++; if (track.readyState === 'ended') track = microphone(); return { getAudioTracks: () => [track], getTracks: () => [track] }; };
+    Object.defineProperty(navigator, 'audioSession', { value: Object.assign(new EventTarget(), { state: 'active', type: 'auto' }) });
     class Channel {
       readyState = 'connecting';
       emit(value) { this.onmessage?.({ data: JSON.stringify(value) }); }
@@ -163,19 +168,37 @@ test('browser preserves audio capture and context across reception loss, updates
   assert.equal(await page.evaluate(() => window.systemActions.hangup), null);
   assert.equal(await page.getByRole('button', { name: 'Start conversation', exact: true }).isVisible(), true);
   assert.equal(await page.evaluate(() => sessionStorage.getItem('paseo-voice-checkpoint-v1')), null);
-  await page.evaluate(() => { window.rejectHangup = true; });
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await page.waitForFunction(() => window.peers.length === 2 && window.peers.at(-1).connectionState === 'connected');
-  assert.match(await page.locator('[data-diagnostic="Car controls"]').textContent(), /Registered stop/);
   await page.evaluate(() => window.systemActions.stop());
-  assert.equal(await page.getByRole('button', { name: 'Start conversation', exact: true }).isVisible(), true, 'stop remains available when hangup is unsupported');
-  await page.waitForTimeout(100);
-  assert.ok(diagnostics.some(entry => entry.event === 'browser_system_hangup'));
-  assert.ok(diagnostics.some(entry => entry.event === 'browser_system_stop'));
-  assert.ok(diagnostics.some(entry => entry.event === 'browser_system_control' && entry.action === 'hangup' && entry.outcome === 'unsupported'));
-  assert.ok(diagnostics.some(entry => entry.event === 'browser_end_cleaned' && entry.count === 1));
+  assert.equal(await page.getByRole('button', { name: 'Start conversation', exact: true }).isVisible(), true, 'explicit stop still ends a call when the browser supports call controls');
+  await page.evaluate(() => { window.rejectHangup = true; });
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await page.waitForFunction(() => window.peers.length === 3 && window.peers.at(-1).connectionState === 'connected');
+  assert.match(await page.locator('[data-diagnostic="Car controls"]').textContent(), /Native browser controls/);
+  assert.equal(await page.evaluate(() => window.systemActions.stop), null, 'unsupported hangup leaves default Safari commands untouched');
+  assert.equal(await page.evaluate(() => navigator.mediaSession.microphoneActive), false, 'native mode does not override browser capture state');
+  await page.evaluate(() => {
+    window.microphoneTrack.muted = true; window.microphoneTrack.dispatchEvent(new Event('mute'));
+    navigator.audioSession.state = 'interrupted'; navigator.audioSession.dispatchEvent(new Event('statechange'));
+  });
+  assert.equal(await page.getByRole('button', { name: 'End call', exact: true }).isVisible(), true, 'temporary microphone mute and interruption are not hangups');
+  await page.evaluate(() => { window.microphoneTrack.muted = false; window.microphoneTrack.dispatchEvent(new Event('unmute')); });
+  await page.evaluate(() => { const p = window.peers.at(-1); p.connectionState = 'failed'; p.onconnectionstatechange(); });
+  const capturesBeforeSystemEnd = await page.evaluate(() => window.microphoneRequests);
+  await page.evaluate(() => { window.microphoneTrack.readyState = 'ended'; window.microphoneTrack.dispatchEvent(new Event('ended')); });
+  await page.clock.runFor(20000);
+  assert.equal(await page.evaluate(() => window.microphoneRequests), capturesBeforeSystemEnd, 'capture ending cancels recovery instead of reopening the microphone');
+  assert.equal(await page.getByRole('button', { name: 'Resume conversation', exact: true }).isVisible(), true);
+  await page.waitForTimeout(100);
+  assert.ok(diagnostics.some(entry => entry.event === 'browser_system_hangup'));
+  assert.ok(diagnostics.some(entry => entry.event === 'browser_system_control' && entry.action === 'media_session' && entry.outcome === 'native'));
+  assert.ok(diagnostics.some(entry => entry.event === 'browser_microphone_ended'));
+  assert.ok(diagnostics.some(entry => entry.event === 'browser_microphone_muted'));
+  assert.ok(diagnostics.some(entry => entry.event === 'browser_microphone_unmuted'));
+  assert.ok(diagnostics.some(entry => entry.event === 'browser_end_cleaned' && entry.count === 1));
+  await page.getByRole('button', { name: 'Resume conversation', exact: true }).click();
+  await page.waitForFunction(() => window.peers.length === 4 && window.peers.at(-1).connectionState === 'connected');
   await page.getByRole('button', { name: 'End call', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: 'Start conversation', exact: true }).isVisible(), true);
 });

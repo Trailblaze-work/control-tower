@@ -124,24 +124,53 @@ function controls(active) {
   $('start').hidden = active; $('mute').hidden = !active; $('end').hidden = !active;
   $('orb').classList.toggle('active', active);
 }
+let ownsSystemControls = false;
 function systemCallControls(active) {
   const session = navigator.mediaSession;
-  if (!session?.setActionHandler) { if (active) { diagnostic('Car controls', 'System controls unavailable; use End call.'); reportClient({ event: 'system_control', action: 'media_session', outcome: 'unsupported' }); } return; }
-  const supported = [];
-  for (const action of ['hangup', 'stop']) {
-    try {
-      session.setActionHandler(action, active ? () => {
-        if (!callWanted) return;
-        reportClient({ event: action === 'hangup' ? 'system_hangup' : 'system_stop' });
-        void finish();
-      } : null);
-      if (active) { supported.push(action); reportClient({ event: 'system_control', action, outcome: 'registered' }); }
-    } catch { if (active) reportClient({ event: 'system_control', action, outcome: 'unsupported' }); }
+  if (!active && !ownsSystemControls) { diagnostic('Car controls', 'Inactive'); return; }
+  if (!session?.setActionHandler) {
+    if (active) { diagnostic('Car controls', 'Native browser controls; Media Session unavailable.'); reportClient({ event: 'system_control', action: 'media_session', outcome: 'unsupported' }); }
+    return;
   }
+  const endFromSystem = action => () => {
+    if (!callWanted) return;
+    reportClient({ event: action === 'hangup' ? 'system_hangup' : 'system_stop' });
+    void finish();
+  };
+  // Do not take over Safari's default media controls if its call action is absent.
+  // Registering only stop can replace native command handling without giving us hangup.
+  if (active) {
+    try {
+      session.setActionHandler('hangup', endFromSystem('hangup')); ownsSystemControls = true;
+      reportClient({ event: 'system_control', action: 'hangup', outcome: 'registered' });
+    } catch {
+      diagnostic('Car controls', 'Native browser controls; hangup action unsupported.');
+      reportClient({ event: 'system_control', action: 'hangup', outcome: 'unsupported' });
+      reportClient({ event: 'system_control', action: 'media_session', outcome: 'native' });
+      return;
+    }
+  } else {
+    try { session.setActionHandler('hangup', null); } catch {}
+  }
+  const supported = active ? ['hangup'] : [];
+  try {
+    session.setActionHandler('stop', active ? endFromSystem('stop') : null);
+    if (active) { supported.push('stop'); reportClient({ event: 'system_control', action: 'stop', outcome: 'registered' }); }
+  } catch { if (active) reportClient({ event: 'system_control', action: 'stop', outcome: 'unsupported' }); }
   try { session.playbackState = active ? 'playing' : 'none'; } catch {}
   try { session.setMicrophoneActive?.(active && !muted); if (active) reportClient({ event: 'system_control', action: 'microphone_state', outcome: session.setMicrophoneActive ? 'registered' : 'unsupported' }); } catch { if (active) reportClient({ event: 'system_control', action: 'microphone_state', outcome: 'unsupported' }); }
   try { session.metadata = active && typeof MediaMetadata !== 'undefined' ? new MediaMetadata({ title: 'Paseo Voice', artist: 'Workspace coordinator' }) : null; } catch {}
-  diagnostic('Car controls', active ? (supported.length ? `Registered ${supported.join(' / ')}; device forwarding needs verification.` : 'System hangup unsupported; use End call.') : 'Inactive');
+  if (!active) ownsSystemControls = false;
+  diagnostic('Car controls', active ? `Registered ${supported.join(' / ')}; device forwarding needs verification.` : 'Inactive');
+}
+let lastCaptureState;
+const watchedCaptureTracks = new WeakSet();
+function reportCaptureState() {
+  if (!callWanted) return;
+  const track = stream?.getAudioTracks()[0];
+  // Content-free flags: live=1, muted=2, enabled=4, speaker paused=8.
+  const flags = (track?.readyState === 'live' ? 1 : 0) | (track?.muted ? 2 : 0) | (track?.enabled ? 4 : 0) | (speaker.paused ? 8 : 0);
+  if (flags !== lastCaptureState) { lastCaptureState = flags; reportClient({ event: 'capture_state', count: flags }); }
 }
 function clearRecovery() {
   clearTimeout(recoveryTimer); clearTimeout(recoveryDeadline); recoveryTimer = recoveryDeadline = undefined;
@@ -154,6 +183,10 @@ function transportReady() {
 }
 function recover(reason, delay) {
   if (!callWanted || recoveryTimer !== undefined) return;
+  if (stream?.getAudioTracks().every(track => track.readyState === 'ended')) {
+    reportClient({ event: 'microphone_ended' });
+    void finish('Microphone capture ended. Tap Resume conversation to continue.', generation, true); return;
+  }
   recoveryStartedAt ??= Date.now();
   recoveryDeadline ??= setTimeout(() => {
     if (!callWanted) return;
@@ -312,6 +345,10 @@ async function start(resuming = history.length > 0 || Boolean(callId), automatic
   try {
     if (!window.isSecureContext) throw new Error('Microphone access needs HTTPS on iPhone. Open the current private call link.');
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('This browser does not expose microphone capture. Open in Safari.');
+    if (automatic && !stream?.getAudioTracks().some(track => track.readyState === 'live')) {
+      reportClient({ event: 'microphone_ended' });
+      await finish('Microphone capture ended. Tap Resume conversation to continue.', version, true); return;
+    }
     if (navigator.audioSession) { try { navigator.audioSession.type = 'play-and-record'; } catch { /* Unsupported category must not end a call. */ } }
     // Start playback inside the tap gesture; attach the remote stream as soon as it arrives.
     speaker.muted = false;
@@ -320,12 +357,20 @@ async function start(resuming = history.length > 0 || Boolean(callId), automatic
     if (version !== generation) { captured.getTracks().forEach(track => track.stop()); return; }
     stream = captured;
     const track = stream.getAudioTracks()[0]; diagnostic('Microphone', track.label || 'Default device');
-    track.addEventListener?.('ended', () => {
-      if (callWanted && stream?.getAudioTracks().includes(track)) {
-        reportClient({ event: 'microphone_ended' }); recover('Microphone capture ended', 0);
-      }
-    }, { once: true });
-    track.enabled = !muted;
+    if (!watchedCaptureTracks.has(track)) {
+      watchedCaptureTracks.add(track);
+      track.addEventListener?.('ended', () => {
+        if (callWanted && stream?.getAudioTracks().includes(track)) {
+          reportClient({ event: 'microphone_ended' });
+          // Capture ending can be a system hangup or revoked permission. Do not reopen it.
+          void finish('Microphone capture ended. Tap Resume conversation to continue.', generation, true);
+        }
+      }, { once: true });
+      for (const event of ['mute', 'unmute']) track.addEventListener?.(event, () => {
+        if (callWanted && stream?.getAudioTracks().includes(track)) { reportClient({ event: event === 'mute' ? 'microphone_muted' : 'microphone_unmuted' }); reportCaptureState(); }
+      });
+    }
+    track.enabled = !muted; lastCaptureState = undefined; reportCaptureState();
     systemCallControls(true);
     $('mute').textContent = muted ? 'Unmute microphone' : 'Mute microphone'; $('mute').setAttribute('aria-pressed', String(muted));
     const config = await api('config', undefined, AbortSignal.any([attemptRequest.signal, AbortSignal.timeout(20000)]));
@@ -357,6 +402,7 @@ async function start(resuming = history.length > 0 || Boolean(callId), automatic
       send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: opening }] } });
       requestResponse(); timer = setInterval(() => void pollJobs(version), 8000);
       heartbeat = setInterval(() => {
+        reportCaptureState();
         if (callId && version === generation) void api('heartbeat', { callId }).catch(() => error('The laptop connection is unavailable. Workspace actions may be delayed.'));
       }, 20000);
       configTimer = setInterval(() => void refreshConfiguration(), 10000);
@@ -395,7 +441,8 @@ $('mute').addEventListener('click', () => {
   const track = stream?.getAudioTracks()[0]; if (!track) return;
   track.enabled = !track.enabled; $('mute').textContent = track.enabled ? 'Mute microphone' : 'Unmute microphone'; $('mute').setAttribute('aria-pressed', String(!track.enabled));
   muted = !track.enabled;
-  try { navigator.mediaSession?.setMicrophoneActive?.(!muted); } catch {}
+  try { if (ownsSystemControls) navigator.mediaSession?.setMicrophoneActive?.(!muted); } catch {}
+  reportCaptureState();
 });
 $('resume').addEventListener('click', () => void speaker.play().then(() => { $('resume').hidden = true; error(''); }).catch(() => error('Playback is still blocked. Check the audio output on your iPhone.')));
 function resumeRecovery() {
@@ -405,7 +452,7 @@ function resumeRecovery() {
   }
 }
 window.addEventListener('online', resumeRecovery);
-document.addEventListener('visibilitychange', () => { diagnostic('Page', document.visibilityState); reportClient({ event: document.visibilityState === 'visible' ? 'page_visible' : 'page_hidden', operation: 'page' }); if (document.visibilityState === 'visible') { void keepAwake(); resumeRecovery(); } });
+document.addEventListener('visibilitychange', () => { reportCaptureState(); diagnostic('Page', document.visibilityState); reportClient({ event: document.visibilityState === 'visible' ? 'page_visible' : 'page_hidden', operation: 'page' }); if (document.visibilityState === 'visible') { void keepAwake(); resumeRecovery(); } });
 navigator.audioSession?.addEventListener?.('statechange', () => {
   diagnostic('Audio session', navigator.audioSession.state);
   reportClient({ event: 'audio_state', outcome: ['active', 'inactive', 'interrupted'].includes(navigator.audioSession.state) ? navigator.audioSession.state : 'unknown' });
