@@ -15,7 +15,8 @@
     "README.md",
     "scripts/",
     "assets/",
-    "docs/"
+    "docs/",
+    "LICENSE"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
@@ -53,5 +54,6 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Trailblaze-work/control-tower.git"
-  }
+  },
+  "license": "MIT"
 }
