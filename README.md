@@ -19,6 +19,14 @@ npm run setup
 
 Setup installs the plugin, starts the background service and opens key settings. It offers to download the official Cloudflare helper if needed. Enter your key, then choose **Control Tower** in Paseo’s sidebar. On web clients the call opens in the panel; an external-browser link is available for restricted devices.
 
+## A conversation, end to end
+
+![Control Tower browser walkthrough: start a conversation, hear a briefing, and queue an instruction for a busy workspace](assets/walkthrough.gif)
+
+*Captured from Control Tower’s browser UI using Playwright. Workspace data and voice events are simulated; no real workspace data or recorded speech is shown.*
+
+For example: “What is blocking the release?” Then: “Ask Build to summarize its remaining blockers when it is free.” Keep talking or interrupt; a queued instruction waits for the agent and is not reported as completed work.
+
 ## What it does
 
 - Summarizes relevant workspace activity and decisions with clear source qualifiers.
