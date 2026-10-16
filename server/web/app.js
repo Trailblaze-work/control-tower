@@ -25,6 +25,10 @@ let checkingConfig = false;
 let history = [];
 let lastAssistant;
 let muted = false;
+let selectedMicrophone = '';
+let microphones = [];
+let switchingMicrophone = false;
+let pendingMicrophoneStream;
 let callWanted = false;
 let recoveryTimer, recoveryDeadline, negotiationTimer, recoveryStartedAt;
 let recoveryAttempts = 0;
@@ -184,6 +188,70 @@ function systemCallControls(active) {
 }
 let lastCaptureState;
 const watchedCaptureTracks = new WeakSet();
+function microphoneConstraints(deviceId) {
+  return { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) }, video: false };
+}
+function renderMicrophones() {
+  const select = $('microphone'); select.replaceChildren();
+  const add = (value, label) => { const option = document.createElement('option'); option.value = value; option.textContent = label; select.append(option); };
+  const defaultLabel = microphones.find(device => device.deviceId === 'default')?.label;
+  add('', defaultLabel ? `System default — ${defaultLabel}` : 'System default');
+  microphones.filter(device => device.deviceId && device.deviceId !== 'default').forEach((device, index) => add(device.deviceId, device.label || `Microphone ${index + 1}`));
+  if (selectedMicrophone && ![...select.options].some(option => option.value === selectedMicrophone)) add(selectedMicrophone, 'Selected microphone (not currently listed)');
+  select.value = selectedMicrophone;
+  select.disabled = switchingMicrophone || phase === 'connecting' || (callWanted && phase !== 'connected') || !navigator.mediaDevices?.enumerateDevices;
+  const track = stream?.getAudioTracks().find(track => track.readyState === 'live');
+  $('microphone-status').textContent = switchingMicrophone ? 'Switching microphone…' : track ? `Using: ${track.label || 'Browser-selected microphone'}${muted ? ' · muted' : ''}` : selectedMicrophone ? `Selected: ${microphones.find(device => device.deviceId === selectedMicrophone)?.label || 'Microphone'} · used when you start` : defaultLabel ? `Selected: System default — ${defaultLabel}` : 'System default · device name available after microphone access.';
+}
+async function refreshMicrophones() {
+  try { microphones = (await navigator.mediaDevices?.enumerateDevices?.() ?? []).filter(device => device.kind === 'audioinput'); }
+  catch { /* Some browsers hide device choices until capture is allowed. */ }
+  renderMicrophones();
+}
+function watchMicrophone(track) {
+  if (watchedCaptureTracks.has(track)) return;
+  watchedCaptureTracks.add(track);
+  track.addEventListener?.('ended', () => {
+    if (callWanted && stream?.getAudioTracks().includes(track)) {
+      reportClient({ event: 'microphone_ended' });
+      // Capture ending can be a system hangup or revoked permission. Do not reopen it.
+      void finish('Microphone capture ended. Tap Resume conversation to continue.', generation, true);
+    }
+  }, { once: true });
+  for (const event of ['mute', 'unmute']) track.addEventListener?.(event, () => {
+    if (callWanted && stream?.getAudioTracks().includes(track)) { reportClient({ event: event === 'mute' ? 'microphone_muted' : 'microphone_unmuted' }); reportCaptureState(); }
+  });
+}
+async function chooseMicrophone(deviceId) {
+  if (switchingMicrophone || phase === 'connecting' || (callWanted && phase !== 'connected')) { renderMicrophones(); return; }
+  const previous = selectedMicrophone;
+  if (!callWanted) { selectedMicrophone = deviceId; renderMicrophones(); return; }
+  const version = generation; const connection = peer;
+  const sender = connection?.getSenders?.().find(sender => sender.track?.kind === 'audio');
+  if (!sender?.replaceTrack) { error('This browser cannot switch microphones during a call. End the call and select a microphone before starting again.'); renderMicrophones(); return; }
+  switchingMicrophone = true; selectedMicrophone = deviceId; renderMicrophones();
+  let captured;
+  try {
+    captured = await navigator.mediaDevices.getUserMedia(microphoneConstraints(deviceId));
+    if (version !== generation || !callWanted || peer !== connection) { captured.getTracks().forEach(track => track.stop()); return; }
+    pendingMicrophoneStream = captured;
+    const track = captured.getAudioTracks()[0]; track.enabled = !muted;
+    await sender.replaceTrack(track);
+    if (version !== generation || !callWanted || peer !== connection) { captured.getTracks().forEach(track => track.stop()); return; }
+    track.enabled = !muted;
+    const oldStream = stream; stream = captured; pendingMicrophoneStream = undefined;
+    watchMicrophone(track); oldStream?.getTracks().forEach(track => track.stop());
+    lastCaptureState = undefined; reportCaptureState(); error('');
+    reportClient({ event: 'microphone_switch', outcome: 'completed' });
+  } catch {
+    captured?.getTracks().forEach(track => track.stop());
+    selectedMicrophone = previous;
+    if (version === generation && callWanted) { error('Could not switch microphones. The current microphone is still selected; check device access and try again.'); reportClient({ event: 'microphone_switch', outcome: 'failed' }); }
+  } finally {
+    if (pendingMicrophoneStream === captured) pendingMicrophoneStream = undefined;
+    switchingMicrophone = false; void refreshMicrophones();
+  }
+}
 function reportCaptureState() {
   if (!callWanted) return;
   const track = stream?.getAudioTracks()[0];
@@ -198,7 +266,7 @@ function clearRecovery() {
 function transportReady() {
   if (peer?.connectionState !== 'connected' || channel?.readyState !== 'open') return;
   if (recoveryStartedAt !== undefined) reportClient({ event: 'recovery_succeeded', durationMs: Date.now()-recoveryStartedAt });
-  clearRecovery(); clearTimeout(negotiationTimer); phase = 'connected'; error(''); status('Listening…'); void keepAwake();
+  clearRecovery(); clearTimeout(negotiationTimer); phase = 'connected'; renderMicrophones(); error(''); status('Listening…'); void keepAwake();
 }
 function recover(reason, delay) {
   if (!callWanted || recoveryTimer !== undefined) return;
@@ -238,6 +306,7 @@ async function finish(message = 'Call ended.', expectedGeneration = generation, 
     }
   }
   generation++; phase = 'idle'; request?.abort();
+  pendingMicrophoneStream?.getTracks().forEach(track => track.stop()); pendingMicrophoneStream = undefined;
   clearTimeout(negotiationTimer);
   if (!keepMedia) { callWanted = false; clearRecovery(); }
   clearInterval(timer); timer = undefined;
@@ -261,7 +330,7 @@ async function finish(message = 'Call ended.', expectedGeneration = generation, 
   controls(keepMedia); $('start').disabled = false; $('mute').textContent = muted ? 'Unmute microphone' : 'Mute microphone'; $('mute').setAttribute('aria-pressed', String(muted)); $('resume').hidden = true;
   $('start').textContent = preserve ? 'Resume conversation' : 'Start conversation';
   status(message);
-  $('refresh').hidden = true;
+  $('refresh').hidden = true; renderMicrophones();
 }
 async function refreshConfiguration() {
   if (checkingConfig || !callId || phase !== 'connected') return;
@@ -373,7 +442,7 @@ async function start(resuming = history.length > 0 || Boolean(callId), automatic
   if (automatic && !callWanted) return;
   if (!automatic) clearRecovery();
   callWanted = true;
-  const version = ++generation; phase = 'connecting'; controls(true); error(''); status('Opening microphone…');
+  const version = ++generation; phase = 'connecting'; controls(true); renderMicrophones(); error(''); status('Opening microphone…');
   const attemptRequest = new AbortController(); request = attemptRequest;
   try {
     if (!window.isSecureContext) throw new Error('Microphone access needs HTTPS on iPhone. Open the current private call link.');
@@ -386,23 +455,12 @@ async function start(resuming = history.length > 0 || Boolean(callId), automatic
     // Start playback inside the tap gesture; attach the remote stream as soon as it arrives.
     speaker.muted = false;
     const reusable = stream?.getAudioTracks().some(track => track.readyState !== 'ended');
-    const captured = reusable ? stream : await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+    const captured = reusable ? stream : await navigator.mediaDevices.getUserMedia(microphoneConstraints(selectedMicrophone));
     if (version !== generation) { captured.getTracks().forEach(track => track.stop()); return; }
     stream = captured;
     const track = stream.getAudioTracks()[0]; diagnostic('Microphone', track.label || 'Default device');
-    if (!watchedCaptureTracks.has(track)) {
-      watchedCaptureTracks.add(track);
-      track.addEventListener?.('ended', () => {
-        if (callWanted && stream?.getAudioTracks().includes(track)) {
-          reportClient({ event: 'microphone_ended' });
-          // Capture ending can be a system hangup or revoked permission. Do not reopen it.
-          void finish('Microphone capture ended. Tap Resume conversation to continue.', generation, true);
-        }
-      }, { once: true });
-      for (const event of ['mute', 'unmute']) track.addEventListener?.(event, () => {
-        if (callWanted && stream?.getAudioTracks().includes(track)) { reportClient({ event: event === 'mute' ? 'microphone_muted' : 'microphone_unmuted' }); reportCaptureState(); }
-      });
-    }
+    watchMicrophone(track);
+    renderMicrophones(); void refreshMicrophones();
     track.enabled = !muted; lastCaptureState = undefined; reportCaptureState();
     systemCallControls(true);
     $('mute').textContent = muted ? 'Unmute microphone' : 'Mute microphone'; $('mute').setAttribute('aria-pressed', String(muted));
@@ -469,6 +527,8 @@ async function start(resuming = history.length > 0 || Boolean(callId), automatic
     }
   }
 }
+$('microphone').addEventListener('change', event => void chooseMicrophone(event.target.value));
+navigator.mediaDevices?.addEventListener?.('devicechange', () => void refreshMicrophones());
 $('start').addEventListener('click', () => void start());
 $('end').addEventListener('click', () => { reportClient({ event: 'end_requested', action: 'button' }); void finish(); });
 $('refresh').addEventListener('click', () => void reconnect());
@@ -476,6 +536,7 @@ $('mute').addEventListener('click', () => {
   const track = stream?.getAudioTracks()[0]; if (!track) return;
   track.enabled = !track.enabled; $('mute').textContent = track.enabled ? 'Mute microphone' : 'Unmute microphone'; $('mute').setAttribute('aria-pressed', String(!track.enabled));
   muted = !track.enabled;
+  pendingMicrophoneStream?.getAudioTracks().forEach(track => { track.enabled = !muted; }); renderMicrophones();
   try { if (ownsSystemControls) navigator.mediaSession?.setMicrophoneActive?.(!muted); } catch {}
   reportCaptureState();
 });
@@ -495,9 +556,10 @@ navigator.audioSession?.addEventListener?.('statechange', () => {
   if (navigator.audioSession.state === 'active') resumeRecovery();
 });
 for (const event of ['pause', 'ended']) speaker.addEventListener(event, () => { if (callWanted) reportClient({ event: event === 'pause' ? 'playback_pause' : 'playback_ended' }); });
-window.addEventListener('pagehide', () => { reportClient({ event: 'page_exit' }); checkpoint(); callWanted = false; clearRecovery(); clearTimeout(negotiationTimer); generation++; request?.abort(); peer?.close(); stream?.getTracks().forEach(track => track.stop()); systemCallControls(false); });
+window.addEventListener('pagehide', () => { reportClient({ event: 'page_exit' }); checkpoint(); callWanted = false; clearRecovery(); clearTimeout(negotiationTimer); generation++; request?.abort(); peer?.close(); stream?.getTracks().forEach(track => track.stop()); pendingMicrophoneStream?.getTracks().forEach(track => track.stop()); systemCallControls(false); });
 window.addEventListener('pageshow', event => { if (event.persisted) void finish('Tap Resume conversation to continue.', generation, true); });
 async function boot() {
+  void refreshMicrophones();
   try {
     const ticket = location.hash.slice(1); window.history.replaceState(null, '', location.pathname);
     if (ticket) {

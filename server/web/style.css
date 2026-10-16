@@ -8,3 +8,5 @@ label{display:block;margin:20px 0 8px}input{display:block;width:100%;padding:14p
 input[type=checkbox]{display:inline-block;width:auto;margin-right:8px}
 
 .embedded header,.embedded footer{display:none}.embedded main{padding:12px}.embedded .call{min-height:380px;padding:20px 0}.embedded #orb{height:64px;width:64px;margin-bottom:16px}
+
+.microphone-picker{width:100%;max-width:360px;margin-top:20px;text-align:left}.microphone-picker label{font-size:.85rem;margin:0 0 8px}.microphone-picker select{width:100%;font:inherit;color:#edf2fa;background:#243049;border:1px solid #263148;border-radius:12px;padding:12px;min-height:44px}.microphone-picker select:focus-visible{outline:3px solid #c7d2fe;outline-offset:3px}.microphone-picker select:disabled{opacity:.6}.microphone-picker p{font-size:.8rem;margin:8px 0 0}

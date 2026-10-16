@@ -19,6 +19,11 @@
         <button id="resume" class="secondary" hidden>Resume audio</button>
         <button id="refresh" class="secondary" hidden>Refresh conversation</button>
       </div>
+      <div class="microphone-picker">
+        <label for="microphone">Microphone</label>
+        <select id="microphone" aria-describedby="microphone-status"><option value="">System default</option></select>
+        <p id="microphone-status" role="status" aria-live="polite">System default · device name available after microphone access.</p>
+      </div>
       <p class="hint">Speak naturally. You can interrupt at any time.</p>
       <p id="error" role="alert" hidden></p>
     </section>

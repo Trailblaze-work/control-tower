@@ -29,3 +29,5 @@ Setup installs the plugin, starts the background service and opens key settings.
 Shared call links give access to your workspace coordinator and use your API account. Share carefully. The laptop must stay awake and online; iPhone backgrounding and CarPlay controls still need device testing.
 
 [Setup, troubleshooting and architecture](docs/operations.md) · [Security](SECURITY.md) · [Development](CONTRIBUTING.md) · [Logo](assets/BRAND.md)
+
+[MIT license](LICENSE)

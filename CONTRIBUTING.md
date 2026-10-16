@@ -1,5 +1,7 @@
 # Development
 
+Install [Gitleaks](https://github.com/gitleaks/gitleaks) (`brew install gitleaks` on macOS), then run `git config core.hooksPath .githooks` to enable the staged-secret check. GitHub also scans fetched history in CI; repository secret scanning and push protection are enabled. Never commit API keys, private call/settings links, cookies, or local runtime files.
+
 Use Node 24+ and `npm ci`. Run `npm run typecheck`, `npm run check:web` and `npm test` before committing. The browser tests simulate media and provider responses: they do not capture microphone audio, make billed model calls or message real workspace agents. On Linux, first run `npx playwright install --with-deps chromium`. On macOS, tests use installed Google Chrome; `CHROME_BIN` can override its path.
 
 The optional `npm run smoke:live` connects to real OpenAI and Paseo services and incurs API charges. Run it deliberately, with the appropriate API key and authorization for any workspace consultations. Never run it automatically in CI.
