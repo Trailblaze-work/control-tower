@@ -65,6 +65,11 @@ export function voiceServer(options: ServerOptions) {
     code: z.enum(['network', 'invalid_response', 'timeout', 'server_error', 'provider_error', 'missing_call', 'unknown']).optional(),
     connection: z.enum(['new', 'connecting', 'connected', 'disconnected', 'failed', 'closed']).optional(),
   }).strict();
+  const frameParents = new Set<string>();
+  const frameOrigin = z.string().max(300).refine(value => {
+    if (value === 'file:') return true;
+    try { const url = new URL(value); return ['https:', 'http:'].includes(url.protocol) && url.origin === value; } catch { return false; }
+  });
   let creating = 0;
   const server = createServer(async (req, res) => {
     const requestId = randomUUID(); const started = Date.now();
@@ -85,16 +90,29 @@ export function voiceServer(options: ServerOptions) {
         if (req.headers.origin && !origins.has(req.headers.origin)) throw new HttpError(403, 'Unrecognized origin');
         if (req.headers['sec-fetch-site'] === 'cross-site') throw new HttpError(403, 'Cross-site request rejected');
       }
-      if (req.method === 'GET' && ['/', '/app.js', '/tower.svg', '/session-state.js', '/style.css', '/settings', '/settings.js'].includes(path)) {
+      if (req.method === 'GET' && ['/', '/embed', '/app.js', '/tower.svg', '/tower-icon.svg', '/session-state.js', '/style.css', '/settings', '/settings.js'].includes(path)) {
         if (path.startsWith('/settings') && !localHosts.has(req.headers.host!)) throw new HttpError(403, 'Settings are available only on the laptop.');
-        const name = path === '/' ? 'index.html' : path === '/settings' ? 'settings.html' : path.slice(1);
-        const content = await readFile(new URL(name === 'tower.svg' ? '../assets/tower.svg' : `./web/${name}`, import.meta.url));
+        const name = ['/', '/embed'].includes(path) ? 'index.html' : path === '/settings' ? 'settings.html' : path.slice(1);
+        if (path === '/embed') {
+          res.removeHeader('X-Frame-Options');
+          const policy = String(res.getHeader('Content-Security-Policy'));
+          res.setHeader('Content-Security-Policy', policy.replace("frame-ancestors 'none'", `frame-ancestors ${frameParents.size ? [...frameParents].join(' ') : "'none'"}`));
+        }
+        const content = await readFile(new URL(['tower.svg', 'tower-icon.svg'].includes(name) ? `../assets/${name}` : `./web/${name}`, import.meta.url));
         res.writeHead(200, { 'Content-Type': name.endsWith('.html') ? 'text/html; charset=utf-8' : name.endsWith('.js') ? 'text/javascript' : name.endsWith('.svg') ? 'image/svg+xml' : 'text/css' });
         res.end(name === 'app.js' ? content.toString().replace('__VOICE_CLIENT_REVISION__', createHash('sha256').update(content).digest('hex').slice(0, 12)) : content); return;
       }
       if (req.method === 'POST' && path === '/api/launch') {
         if (!equalSecret(req.headers.authorization ?? '', `Bearer ${options.controlToken}`)) throw new HttpError(401, 'Local control authentication required');
-        json(res, 200, { url: `${options.publicUrl}/#${access.ticket()}`, localUrl: `http://localhost:${options.port}/#${access.ticket()}`, settingsUrl: `http://localhost:${options.port}/settings#${options.controlToken}` }); return;
+        const data = parseJson((await body(req, 2000)) || '{}');
+        let embedUrl: string | undefined;
+        if (data.embedOrigin !== undefined) {
+          const origin = frameOrigin.safeParse(data.embedOrigin);
+          if (!origin.success) throw new HttpError(400, 'Invalid embedding origin');
+          frameParents.add(origin.data);
+          embedUrl = `${options.publicUrl}/embed#${access.ticket()}`;
+        }
+        json(res, 200, { url: `${options.publicUrl}/#${access.ticket()}`, localUrl: `http://localhost:${options.port}/#${access.ticket()}`, settingsUrl: `http://localhost:${options.port}/settings#${options.controlToken}`, embedUrl }); return;
       }
       if (req.method === 'POST' && path === '/api/launch-status') {
         if (!equalSecret(req.headers.authorization ?? '', `Bearer ${options.controlToken}`)) throw new HttpError(401, 'Local control authentication required');
@@ -107,11 +125,11 @@ export function voiceServer(options: ServerOptions) {
         const paired = typeof data.ticket === 'string' ? access.pair(data.ticket) : null;
         if (!paired) throw new HttpError(401, 'Link expired or already used. Open a fresh link from Paseo or run npm run link on the laptop.');
         // A fresh link must not change an already-paired browser's queue owner.
-        const session = access.valid(req.headers.cookie) ?? paired;
+        const session = access.validBearer(req.headers.authorization) ?? access.valid(req.headers.cookie) ?? paired;
         await access.persist();
         const secure = req.headers.origin?.startsWith('https:') || req.headers['x-forwarded-proto'] === 'https';
         res.setHeader('Set-Cookie', `paseo_voice=${session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${secure ? '; Secure' : ''}`);
-        json(res, 200, { paired: true }); return;
+        json(res, 200, { paired: true, ...(data.embedded === true ? { sessionToken: session } : {}) }); return;
       }
       if (['/api/settings', '/api/billing', '/api/diagnostics'].includes(path)) {
         if (!localHosts.has(req.headers.host!) || !equalSecret(req.headers.authorization ?? '', `Bearer ${options.controlToken}`)) throw new HttpError(403, 'Laptop settings authentication required.');
@@ -129,7 +147,7 @@ export function voiceServer(options: ServerOptions) {
           json(res, 200, { ...options.telemetry?.snapshot(), connection: options.connection?.(), calls: [...calls.values()].map(c => ({ ageSeconds: Math.round((Date.now()-c.createdAt)/1000), lastSeenSeconds: Math.round((Date.now()-c.lastSeen)/1000), utterances: c.transcriptIndex })) }); return;
         }
       }
-      const owner = access.valid(req.headers.cookie);
+      const owner = access.validBearer(req.headers.authorization) ?? access.valid(req.headers.cookie);
       if (!owner) throw new HttpError(401, 'Open a fresh link from the Paseo plugin or run npm run link on the laptop.');
       if (req.method === 'GET' && path === '/api/status') {
         json(res, 200, { ready: options.ready(), voiceConfigured: Boolean(await getKey()), model: (await getConfig()).session.model, hosting: 'laptop' }); return;

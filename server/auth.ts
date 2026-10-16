@@ -48,6 +48,10 @@ export class Access {
     const token = cookie.split(';').map(v => v.trim()).find(v => v.startsWith('paseo_voice='))?.slice(12);
     return token && (this.sessions.get(token) ?? 0) > now ? token : null;
   }
+  validBearer(header = '', now = Date.now()) {
+    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+    return token && (this.sessions.get(token) ?? 0) > now ? token : null;
+  }
   private prune(now: number) {
     for (const map of [this.tickets, this.sessions]) for (const [key, expiry] of map) if (expiry <= now) map.delete(key);
   }

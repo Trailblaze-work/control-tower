@@ -1,5 +1,5 @@
 {
-  "name": "tower",
+  "name": "control-tower",
   "private": true,
   "version": "0.0.0",
   "files": [
@@ -14,7 +14,8 @@
     "shared/",
     "README.md",
     "scripts/",
-    "assets/"
+    "assets/",
+    "docs/"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
@@ -27,7 +28,8 @@
     "smoke:live": "node scripts/smoke.mjs",
     "refresh": "node scripts/refresh.ts",
     "settings": "node scripts/settings.ts",
-    "diagnostics": "node scripts/diagnostics.ts"
+    "diagnostics": "node scripts/diagnostics.ts",
+    "setup": "node scripts/setup.ts"
   },
   "devDependencies": {
     "@getpaseo/plugin": "0.11.2",
@@ -50,6 +52,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Trailblaze-work/tower.git"
+    "url": "git+https://github.com/Trailblaze-work/control-tower.git"
   }
 }

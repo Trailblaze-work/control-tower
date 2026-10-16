@@ -1,4 +1,4 @@
-# Tower development workflow
+# Control Tower development workflow
 
 - For this development installation, the user has authorized the necessary voice-service restarts whenever this product is updated. Complete validation, activate changes, and verify service health without requesting permission again.
 - Prefer live prompt updates or `npm run refresh` to preserve the current tunnel URL. Restart the supervisor only when its code or startup configuration changes; an anonymous tunnel replacement changes the hostname.

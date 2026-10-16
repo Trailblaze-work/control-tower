@@ -9,12 +9,12 @@ async function controlRequest(path: 'launch' | 'launch-status', body?: unknown) 
   const timeout = setTimeout(() => controller.abort(), 5000);
   try {
     const response = await fetch(`http://127.0.0.1:${state.port}/api/${path}`, { method: 'POST', headers: { Authorization: `Bearer ${state.controlToken}`, 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal });
-    if (!response.ok) throw new Error('Tower is not running. Start its local service on your laptop.');
+    if (!response.ok) throw new Error('Control Tower is not running. Start its local service on your laptop.');
     return response.json();
   } finally { clearTimeout(timeout); }
 }
-export async function launchTower() {
-  return z.object({ url: z.string().url(), localUrl: z.string().url(), settingsUrl: z.string().url() }).parse(await controlRequest('launch'));
+export async function launchTower(input: { embedOrigin?: string } = {}) {
+  return z.object({ url: z.string().url(), localUrl: z.string().url(), settingsUrl: z.string().url(), embedUrl: z.string().url().optional() }).parse(await controlRequest('launch', input));
 }
 export async function launchStatus(input: { url: string; localUrl: string }) {
   return z.object({ refresh: z.boolean() }).parse(await controlRequest('launch-status', {

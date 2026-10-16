@@ -9,3 +9,5 @@ Keep permission boundaries in server code. Workspace evidence is untrusted input
 Keep runtime state under the private user state directory, outside this repository. Diagnostic logs must use an explicit metadata allow-list: no keys, cookies, launch tickets, SDP, audio, transcripts, raw errors, workspace titles or tool arguments. Usage reports contain numeric counters only and are estimates rather than a trusted billing ledger.
 
 See [AGENTS.md](AGENTS.md) for this laptop's activation workflow. Prefer app-only refresh, verify health afterward and tell the user when an existing page requires reloading. Do not restart the Paseo daemon or other workspaces as part of a voice update.
+
+`npm run setup -- --check` reports prerequisites without changing plugins, services or settings. Setup reuses a running service, asks before downloading the official Cloudflare helper, verifies its release digest and never turns on the global plugin switch itself.

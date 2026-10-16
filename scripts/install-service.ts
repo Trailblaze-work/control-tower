@@ -19,7 +19,7 @@ await writeFile(destination, `<?xml version="1.0" encoding="UTF-8"?>
 <key>Label</key><string>dev.paseo.voice</string>
 <key>ProgramArguments</key><array><string>${xml(process.execPath)}</string><string>${xml(join(root, 'scripts/service.ts'))}</string></array>
 <key>WorkingDirectory</key><string>${xml(root)}</string>
-<key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(join(stateDir, 'bin'))}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>${process.env.CLOUDFLARED_BIN ? `<key>CLOUDFLARED_BIN</key><string>${xml(process.env.CLOUDFLARED_BIN)}</string>` : ''}</dict>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>15</integer>
 <key>StandardOutPath</key><string>${xml(log)}</string><key>StandardErrorPath</key><string>${xml(log)}</string>
 </dict></plist>`, { mode: 0o600 });
@@ -27,4 +27,4 @@ const domain = `gui/${process.getuid!()}`;
 spawnSync('launchctl', ['bootout', domain, destination], { stdio: 'ignore' });
 const result = spawnSync('launchctl', ['bootstrap', domain, destination], { stdio: 'inherit' });
 if (result.status !== 0) throw new Error('Could not register the background service. Run npm run serve to start it in a terminal.');
-console.log('Tower background service installed. Its temporary tunnel address updates automatically.');
+console.log('Control Tower background service installed. Its temporary tunnel address updates automatically.');

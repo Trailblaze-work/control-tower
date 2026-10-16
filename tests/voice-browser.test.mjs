@@ -233,3 +233,26 @@ test('laptop settings save write-only keys, display measured usage, and reject s
   const paired = await fetch(origin+'/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticket: new URL(links.url).hash.slice(1) }) });
   assert.equal((await fetch(origin+'/api/settings', { headers: { Cookie: paired.headers.get('set-cookie').split(';')[0] } })).status, 403);
 });
+
+test('cross-site embedded page pairs without cookies and receives microphone delegation', { timeout: 30000 }, async t => {
+  const { createServer: createHttpServer } = await import('node:http');
+  const reservation = createServer(); await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve)); const port = reservation.address().port; await new Promise(resolve => reservation.close(resolve));
+  const origin = `http://localhost:${port}`;
+  const server = voiceServer({ port, publicUrl: origin, controlToken: 'frame-control', apiKey: 'test-key', ready: () => true, coordinator: { invoke: async () => ({}) } });
+  await new Promise(resolve => server.listen(port, '127.0.0.1', resolve)); t.after(() => { server.closeAllConnections(); server.close(); });
+  let embedUrl;
+  const parent = createHttpServer((_req, res) => { res.setHeader('Content-Type','text/html'); res.end(`<iframe title="Call" allow="microphone; autoplay" src="${embedUrl}"></iframe>`); });
+  await new Promise(resolve => parent.listen(0,'127.0.0.1',resolve)); t.after(() => { parent.closeAllConnections(); parent.close(); });
+  const parentOrigin = `http://127.0.0.1:${parent.address().port}`;
+  const links = await (await fetch(origin+'/api/launch',{method:'POST',headers:{Authorization:'Bearer frame-control','Content-Type':'application/json'},body:JSON.stringify({embedOrigin:parentOrigin})})).json(); embedUrl = links.embedUrl;
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN ?? (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined),headless:true }); t.after(() => browser.close());
+  const context = await browser.newContext();
+  await context.route('**/api/**', async route => { const headers = { ...route.request().headers() }; delete headers.cookie; await route.continue({headers}); });
+  const page = await context.newPage(); await page.goto(parentOrigin);
+  const frame = page.frameLocator('iframe');
+  await frame.getByRole('button',{name:'Start conversation',exact:true}).waitFor();
+  assert.equal(await frame.getByRole('button',{name:'Start conversation',exact:true}).isEnabled(),true);
+  assert.equal(await frame.locator('body').evaluate(()=>document.featurePolicy.allowsFeature('microphone')),true);
+  assert.equal(await frame.locator('#error').isVisible(),false);
+  assert.equal(new URL(page.frames()[1].url()).hash,'','single-use ticket is removed from iframe history');
+});

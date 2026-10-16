@@ -4,6 +4,11 @@ const clientId = crypto.randomUUID();
 const $ = (id) => document.getElementById(id);
 let peer, channel, stream, callId, wakeLock, timer, heartbeat, request, configTimer;
 let generation = 0;
+let frameToken;
+const embedded = location.pathname.endsWith('/embed');
+if (embedded) document.body.classList.add('embedded');
+if (embedded) { try { frameToken = sessionStorage.getItem('control-tower-frame-token') || undefined; } catch {} }
+function authHeaders() { return frameToken ? { Authorization: `Bearer ${frameToken}` } : {}; }
 let phase = 'idle';
 let transcriptQueue = Promise.resolve();
 let toolQueue = Promise.resolve();
@@ -74,7 +79,7 @@ function showWorkspaceRequest(result) {
 async function api(path, data, signal) {
   const started = performance.now();
   try {
-    const response = await fetch(`./api/${path}`, { method: data === undefined ? 'GET' : 'POST', headers: data === undefined ? {} : { 'Content-Type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data), signal: signal ?? AbortSignal.timeout(20000) });
+    const response = await fetch(`./api/${path}`, { method: data === undefined ? 'GET' : 'POST', headers: { ...authHeaders(), ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: data === undefined ? undefined : JSON.stringify(data), signal: signal ?? AbortSignal.timeout(20000) });
     let result;
     try { result = await response.json(); }
     catch { const cause = new Error('The call service returned an unreadable response. The tunnel may be unavailable.'); cause.code = 'invalid_response'; cause.status = response.status; throw cause; }
@@ -98,7 +103,7 @@ async function flushDiagnostics() {
   flushingDiagnostics = true;
   try {
     while (diagnosticBuffer.length) {
-      const r = await fetch('./api/diagnostic', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(diagnosticBuffer[0]), keepalive: true, signal: AbortSignal.timeout(4000) });
+      const r = await fetch('./api/diagnostic', { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify(diagnosticBuffer[0]), keepalive: true, signal: AbortSignal.timeout(4000) });
       if (!r.ok) break; diagnosticBuffer.shift();
     }
   } catch { /* Retry buffered, content-free diagnostics after the next successful API request. */ }
@@ -159,7 +164,7 @@ function systemCallControls(active) {
   } catch { if (active) reportClient({ event: 'system_control', action: 'stop', outcome: 'unsupported' }); }
   try { session.playbackState = active ? 'playing' : 'none'; } catch {}
   try { session.setMicrophoneActive?.(active && !muted); if (active) reportClient({ event: 'system_control', action: 'microphone_state', outcome: session.setMicrophoneActive ? 'registered' : 'unsupported' }); } catch { if (active) reportClient({ event: 'system_control', action: 'microphone_state', outcome: 'unsupported' }); }
-  try { session.metadata = active && typeof MediaMetadata !== 'undefined' ? new MediaMetadata({ title: 'Tower', artist: 'Workspace coordinator' }) : null; } catch {}
+  try { session.metadata = active && typeof MediaMetadata !== 'undefined' ? new MediaMetadata({ title: 'Control Tower', artist: 'Workspace coordinator' }) : null; } catch {}
   if (!active) ownsSystemControls = false;
   diagnostic('Car controls', active ? `Registered ${supported.join(' / ')}; device forwarding needs verification.` : 'Inactive');
 }
@@ -412,7 +417,7 @@ async function start(resuming = history.length > 0 || Boolean(callId), automatic
     await connection.setLocalDescription(await connection.createOffer());
     if (version !== generation) { connection.close(); return; }
     status('Connecting voice…');
-    const response = await fetch('./api/session', { method: 'POST', headers: { 'Content-Type': 'application/sdp', ...(resuming && callId ? { 'X-Previous-Call': callId } : {}) }, body: connection.localDescription.sdp, signal: AbortSignal.any([attemptRequest.signal, AbortSignal.timeout(35000)]) });
+    const response = await fetch('./api/session', { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/sdp', ...(resuming && callId ? { 'X-Previous-Call': callId } : {}) }, body: connection.localDescription.sdp, signal: AbortSignal.any([attemptRequest.signal, AbortSignal.timeout(35000)]) });
     if (!response.ok) { const cause = new Error((await response.json()).error); cause.status = response.status; throw cause; }
     const createdCall = response.headers.get('X-Call-Id');
     const answer = await response.text();
@@ -465,7 +470,13 @@ window.addEventListener('pageshow', event => { if (event.persisted) void finish(
 async function boot() {
   try {
     const ticket = location.hash.slice(1); window.history.replaceState(null, '', location.pathname);
-    if (ticket) await api('pair', { ticket });
+    if (ticket) {
+      const paired = await api('pair', { ticket, embedded });
+      if (embedded && paired.sessionToken) {
+        frameToken = paired.sessionToken;
+        try { sessionStorage.setItem('control-tower-frame-token', frameToken); } catch {}
+      }
+    }
     const info = await api('status');
     diagnostic('Page revision', clientRevision); reportClient({ event: 'client_loaded', operation: 'page' });
     reportClient({ event: 'system_control', action: 'audio_session', outcome: navigator.audioSession ? 'registered' : 'unsupported' });

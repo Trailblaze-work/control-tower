@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -8,7 +11,7 @@ let stopping = false;
 let logBuffer = '';
 let tunnelUrl: string | undefined;
 let restartTimer: ReturnType<typeof setTimeout> | undefined;
-const tunnel = spawn(process.env.CLOUDFLARED_BIN ?? '/opt/homebrew/bin/cloudflared', ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${port}`], { cwd: root, stdio: ['ignore', 'ignore', 'pipe'] });
+const tunnel = spawn(process.env.CLOUDFLARED_BIN ?? [join(homedir(), '.paseo/voice/bin/cloudflared'), '/opt/homebrew/bin/cloudflared', '/usr/local/bin/cloudflared'].find(path => existsSync(path)) ?? 'cloudflared', ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${port}`], { cwd: root, stdio: ['ignore', 'ignore', 'pipe'] });
 function stop(code = 0) {
   if (stopping) return;
   stopping = true; clearTimeout(startupTimeout); clearTimeout(restartTimer);

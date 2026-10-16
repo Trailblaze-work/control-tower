@@ -1,7 +1,9 @@
 {
-  "id": "tower",
+  "id": "control-tower",
   "description": "Tower \u2014 your agents, on frequency. Live voice coordination for Paseo workspaces.",
   "requirements": {
     "paseo": ">=0.11.2 <0.12.0"
-  }
+  },
+  "name": "Control Tower",
+  "icon": "assets/tower.png"
 }

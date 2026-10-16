@@ -86,3 +86,29 @@ test('HTTP boundary authenticates sessions, rejects cross-origin requests and is
   assert.equal((await request('/api/end', { method: 'POST', headers: { Cookie: cookie }, body: JSON.stringify({ callId }) })).status, 200);
   assert.equal((await request('/api/tool', { method: 'POST', headers: { Cookie: cookie }, body: payload })).status, 404);
 });
+
+test('embedding requires an owner-registered parent and uses scoped call credentials without cookies', async t => {
+  const server = voiceServer({ port: 6768, publicUrl: 'https://voice.example', controlToken: 'owner-control', apiKey: 'provider-key', ready: () => true, coordinator: { invoke: async () => ({}) } as unknown as Coordinator });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => { server.closeAllConnections(); server.close(); });
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const request = (path: string, init: RequestInit = {}): Promise<Response> => new Promise((resolve, reject) => {
+    const req = rawRequest(url + path, { method: init.method ?? 'GET', headers: { Host: 'voice.example', ...Object.fromEntries(new Headers(init.headers)) } }, res => {
+      const chunks: Buffer[] = []; res.on('data', chunk => chunks.push(Buffer.from(chunk))); res.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: res.statusCode, headers: Object.fromEntries(Object.entries(res.headers).filter(([,value]) => typeof value === 'string')) as Record<string,string> })));
+    }); req.on('error', reject); req.end(init.body);
+  });
+  assert.match((await request('/')).headers.get('content-security-policy')!, /frame-ancestors 'none'/);
+  assert.equal((await request('/api/launch', { method: 'POST', body: JSON.stringify({ embedOrigin: 'https://evil.example' }) })).status, 401);
+  const launched = await request('/api/launch', { method: 'POST', headers: { Authorization: 'Bearer owner-control' }, body: JSON.stringify({ embedOrigin: 'https://app.paseo.sh' }) });
+  const links = await launched.json() as { embedUrl: string };
+  const page = await request('/embed');
+  assert.equal(page.headers.get('x-frame-options'), null);
+  assert.match(page.headers.get('content-security-policy')!, /frame-ancestors https:\/\/app.paseo.sh/);
+  assert.ok(!page.headers.get('content-security-policy')!.includes('evil.example'));
+  const paired = await request('/api/pair', { method: 'POST', body: JSON.stringify({ embedded: true, ticket: new URL(links.embedUrl).hash.slice(1) }) });
+  const session = await paired.json() as { sessionToken: string };
+  assert.ok(session.sessionToken);
+  assert.equal((await request('/api/status')).status, 401);
+  assert.equal((await request('/api/status', { headers: { Authorization: `Bearer ${session.sessionToken}` } })).status, 200);
+  assert.equal((await request('/api/settings', { headers: { Authorization: `Bearer ${session.sessionToken}` } })).status, 403);
+  assert.equal((await request('/api/status', { headers: { Authorization: 'Bearer bogus' } })).status, 401);
+});

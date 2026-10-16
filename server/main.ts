@@ -29,7 +29,7 @@ const queueTimer = setInterval(() => { void outbox.tick().catch(() => console.er
 const server = voiceServer({ ...state, access, settings, usage, telemetry, report, apiKey: null, getApiKey: () => settings.key(), connection: () => paseo.getConnectionState().status, coordinator: new Coordinator(paseo, outbox, report, async () => (await settings.status()).allowWorkspaceRenames), ready: () => paseo.getConnectionState().status === 'connected' });
 server.on('error', () => { console.error('Could not start voice server. Check whether its port is already in use.'); process.exitCode = 1; void paseo.close(); });
 server.listen(port, '127.0.0.1', () => {
-  void persistState(state).then(() => console.log(`Tower listening at ${publicUrl}. Run npm run link for a private launch link.`));
+  void persistState(state).then(() => console.log(`Control Tower listening at ${publicUrl}. Run npm run link for a private launch link.`));
 });
 let closing = false;
 async function close() { if (closing) return; closing = true; clearInterval(queueTimer); clearInterval(connectionTimer); server.close(); await paseo.close(); await outbox.flush(); report({ event: 'service_stopped' }); await telemetry.flush(); }
