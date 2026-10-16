@@ -9,7 +9,7 @@ function fixture(allowRenames: () => Promise<boolean> = async () => false) {
   let name = 'Billing'; let title: string | null = null; const renameWrites: string[] = [];
   const workspace = () => ({ id: 'w', name, title, projectId: 'p', projectDisplayName: 'App', projectRootPath: '/app', workspaceDirectory: '/app/billing', workspaceKind: 'worktree', projectKind: 'git', status: 'idle' });
   const agent = {
-    get status() { return status; }, archivedAt: null,
+    get status() { return status; }, workspaceId: 'w', archivedAt: null,
     refresh: async () => ({}), current: () => ({ title: 'Billing' }),
     send: async (text: string, options: unknown) => { sent.push({ text, options }); },
     waitForFinish: async () => ({ status: 'idle', lastMessage: 'Done with evidence.' }),
@@ -41,8 +41,8 @@ test('pairing links expire, are single-use and establish expiring sessions', () 
 
 test('routine messages send directly without confirmation and retries do not duplicate them', async () => {
   const { coordinator, call, sent } = fixture();
-  call.knownAgents.add('billing');
-  const result = await coordinator.invoke(call, 'send', 'send_message', { agentId: 'billing', message: 'Please summarize the agreed next steps.' }) as { jobId: string };
+  await coordinator.invoke(call, 'discover', 'get_overview', {});
+  const result = await coordinator.invoke(call, 'send', 'send_message', { workspaceId: 'w', workspaceName: 'Billing', agentId: 'a', message: 'Please summarize the agreed next steps.' }) as { jobId: string };
   assert.ok(result.jobId);
   assert.equal(sent.length, 1);
   assert.match(sent[0].text, /Please summarize the agreed next steps/);
@@ -51,7 +51,7 @@ test('routine messages send directly without confirmation and retries do not dup
   assert.ok(!sent[0].text.includes('Do not change files'));
   assert.match(sent[0].text, /not inherently read-only/);
   assert.deepEqual(sent[0].options, { messageId: result.jobId, activeTurnBehavior: 'steer' });
-  assert.deepEqual(await coordinator.invoke(call, 'send', 'send_message', { agentId: 'billing', message: 'Please summarize the agreed next steps.' }), result);
+  assert.deepEqual(await coordinator.invoke(call, 'send', 'send_message', { workspaceId: 'w', workspaceName: 'Billing', agentId: 'a', message: 'Please summarize the agreed next steps.' }), result);
   assert.equal(sent.length, 1);
 });
 
@@ -59,7 +59,7 @@ test('workspace discovery is required before reading or messaging an agent', asy
   const { coordinator, call, sent } = fixture();
   for (const [name, args] of [
     ['get_activity', { agentId: 'a' }],
-    ['send_message', { agentId: 'a', message: 'Please summarize the plan.' }],
+    ['send_message', { workspaceId: 'w', workspaceName: 'Billing', agentId: 'a', message: 'Please summarize the plan.' }],
   ] as const) {
     const result = await coordinator.invoke(call, name, name, args) as { error: string };
     assert.match(result.error, /get_overview first/);
@@ -67,33 +67,33 @@ test('workspace discovery is required before reading or messaging an agent', asy
   assert.equal(sent.length, 0);
   const overview = await coordinator.invoke(call, 'overview', 'get_overview', {}) as { agents: { id: string }[] };
   assert.deepEqual(overview.agents.map(agent => agent.id), ['a']);
-  const job = await coordinator.invoke(call, 'after-discovery', 'send_message', { agentId: 'a', message: 'What is blocked?' }) as { jobId: string };
+  const job = await coordinator.invoke(call, 'after-discovery', 'send_message', { workspaceId: 'w', workspaceName: 'Billing', agentId: 'a', message: 'What is blocked?' }) as { jobId: string };
   assert.ok(job.jobId);
   assert.equal(sent.length, 1);
 });
 
 test('questions use the same durable messaging path, wait for busy agents and deduplicate retries', async () => {
-  const idle = fixture(); idle.call.knownAgents.add('a');
-  const result = await idle.coordinator.invoke(idle.call, 'question', 'send_message', { agentId: 'a', message: 'What is blocked?' });
-  await idle.coordinator.invoke(idle.call, 'question', 'send_message', { agentId: 'a', message: 'What is blocked?' });
+  const idle = fixture(); await idle.coordinator.invoke(idle.call, 'discover', 'get_overview', {});
+  const result = await idle.coordinator.invoke(idle.call, 'question', 'send_message', { workspaceId: 'w', workspaceName: 'Billing', agentId: 'a', message: 'What is blocked?' });
+  await idle.coordinator.invoke(idle.call, 'question', 'send_message', { workspaceId: 'w', workspaceName: 'Billing', agentId: 'a', message: 'What is blocked?' });
   assert.equal(idle.sent.length, 1);
   assert.ok(!idle.sent[0].text.includes('Do not change files'));
   assert.match(idle.sent[0].text, /What is blocked/);
   assert.ok((result as { jobId: string }).jobId);
-  const busy = fixture(); busy.call.knownAgents.add('a'); busy.busy();
-  assert.equal((await busy.coordinator.invoke(busy.call, 'q', 'send_message', { agentId: 'a', message: 'Why?' }) as { status: string }).status, 'queued');
+  const busy = fixture(); await busy.coordinator.invoke(busy.call, 'discover', 'get_overview', {}); busy.busy();
+  assert.equal((await busy.coordinator.invoke(busy.call, 'q', 'send_message', { workspaceId: 'w', workspaceName: 'Billing', agentId: 'a', message: 'Why?' }) as { status: string }).status, 'queued');
   assert.equal(busy.sent.length, 0);
-  const refusedMessage = await busy.coordinator.invoke(busy.call, 'relay', 'send_message', { agentId: 'a', message: 'Please summarize the plan.' }) as { status: string };
+  const refusedMessage = await busy.coordinator.invoke(busy.call, 'relay', 'send_message', { workspaceId: 'w', workspaceName: 'Billing', agentId: 'a', message: 'Please summarize the plan.' }) as { status: string };
   assert.equal(refusedMessage.status, 'queued');
   assert.equal(busy.sent.length, 0);
 });
 
 test('tool arguments are validated and message jobs remain isolated between browser owners', async () => {
   const { coordinator, call, sent } = fixture();
-  call.knownAgents.add('a');
-  const invalid = await coordinator.invoke(call, 'bad', 'send_message', { agentId: 'a', message: 'Why?', shell: 'anything' }) as { error: string };
+  await coordinator.invoke(call, 'discover', 'get_overview', {});
+  const invalid = await coordinator.invoke(call, 'bad', 'send_message', { workspaceId: 'w', workspaceName: 'Billing', agentId: 'a', message: 'Why?', shell: 'anything' }) as { error: string };
   assert.equal(invalid.error, 'Invalid tool arguments');
-  const job = await coordinator.invoke(call, 'q', 'send_message', { agentId: 'a', message: 'Why?' }) as { jobId: string };
+  const job = await coordinator.invoke(call, 'q', 'send_message', { workspaceId: 'w', workspaceName: 'Billing', agentId: 'a', message: 'Why?' }) as { jobId: string };
   const other = conversation('other');
   assert.deepEqual(await coordinator.invoke(other, 'read', 'get_job', { jobId: job.jobId }), { error: 'Unknown job' });
   assert.equal(sent.length, 1);
@@ -163,9 +163,9 @@ test('workspace RPC failures keep a specific safe cause and diagnostic reference
 
 
 test('authorized commands share the question path without removing action-specific safeguards', async () => {
-  const { coordinator, call, sent } = fixture(); call.knownAgents.add('a');
+  const { coordinator, call, sent } = fixture(); await coordinator.invoke(call, 'discover', 'get_overview', {});
   const message = 'The user explicitly authorizes pushing commit abc123 to main in the private Example/voice repo.';
-  const result = await coordinator.invoke(call, 'authorized-command', 'send_message', { agentId: 'a', message }) as { jobId: string };
+  const result = await coordinator.invoke(call, 'authorized-command', 'send_message', { workspaceId: 'w', workspaceName: 'Billing', agentId: 'a', message }) as { jobId: string };
   assert.ok(result.jobId); assert.equal(sent.length, 1); assert.ok(sent[0].text.includes(message));
   assert.match(sent[0].text, /apply it within that stated scope/);
   assert.match(sent[0].text, /external publishing and secret access require specific user authorization/);
@@ -173,4 +173,28 @@ test('authorized commands share the question path without removing action-specif
   assert.equal(new Set<string>(tools.map(tool => tool.name)).has('ask_agent'), false);
   assert.deepEqual(await coordinator.invoke(call, 'retired-tool', 'ask_agent', { agentId: 'a', question: 'Legacy request' }), { error: 'Unknown tool' });
   assert.equal(sent.length, 1, 'retired tool calls are never silently converted into work');
+});
+
+
+test('workspace-bound messaging rejects wrong names and agents instead of silently queueing elsewhere', async () => {
+  const f = fixture();
+  const overview = await f.coordinator.invoke(f.call, 'overview', 'get_overview', {}) as { workspaces: { agents: { id: string }[] }[] };
+  assert.equal(overview.workspaces[0].agents[0].id, 'a');
+  const wrongName = await f.coordinator.invoke(f.call, 'wrong-name', 'send_message', { workspaceId: 'w', workspaceName: 'Zeropoint', agentId: 'a', message: 'Is issue 11 complete?' }) as { code: string; jobId?: string };
+  assert.equal(wrongName.code, 'workspace_mismatch'); assert.equal(wrongName.jobId, undefined);
+  const wrongAgent = await f.coordinator.invoke(f.call, 'wrong-agent', 'send_message', { workspaceId: 'w', workspaceName: 'Billing', agentId: 'global-chat-agent', message: 'Is issue 11 complete?' }) as { code: string; jobId?: string };
+  assert.equal(wrongAgent.code, 'agent_mismatch'); assert.equal(wrongAgent.jobId, undefined);
+  assert.equal(f.sent.length, 0);
+  const receipt = await f.coordinator.invoke(f.call, 'correct', 'send_message', { workspaceId: 'w', workspaceName: 'Billing', message: 'Is issue 11 complete?' }) as { workspaceId: string; agentId: string; delivery: string };
+  assert.equal(receipt.workspaceId, 'w'); assert.equal(receipt.agentId, 'a'); assert.equal(receipt.delivery, 'accepted');
+  assert.equal(f.sent.length, 1);
+});
+
+test('a renamed workspace keeps its identity and can receive a message without asking for its agent ID', async () => {
+  const f = fixture(async () => true);
+  await f.coordinator.invoke(f.call, 'overview', 'get_overview', {});
+  recordUtterance(f.call, 'Rename Billing to Control Tower');
+  await f.coordinator.invoke(f.call, 'rename', 'request_workspace_rename', { workspaceId: 'w', title: 'Control Tower', reason: 'User request' });
+  const result = await f.coordinator.invoke(f.call, 'message', 'send_message', { workspaceId: 'w', workspaceName: 'Control Tower', message: 'Please plan voice integrations.' }) as { jobId: string };
+  assert.ok(result.jobId); assert.equal(f.sent.length, 1);
 });

@@ -6,11 +6,13 @@ import { silent, type Reporter } from './telemetry.ts';
 
 const messageSchema = z.object({
   id: z.string(), owner: z.string(), agentId: z.string(), prompt: z.string(), createdAt: z.number(),
+  workspaceId: z.string().optional(), workspaceName: z.string().optional(),
   status: z.enum(['queued', 'submitting', 'accepted', 'waiting', 'completed', 'permission', 'error', 'timeout', 'unknown', 'cancelled', 'expired']),
   reply: z.string().optional(), error: z.string().optional(), note: z.string().optional(),
   submittedAt: z.number().optional(),
 });
 type Message = z.infer<typeof messageSchema>;
+type MessageReceipt = { jobId?: string; status?: Message['status']; agentId?: string; workspaceId?: string; workspaceName?: string; delivery?: string; note?: string; instruction?: string; error?: string };
 export class Outbox {
   private paseo: PaseoApi;
   private path?: string;
@@ -33,6 +35,10 @@ export class Outbox {
     if (raw === undefined) return;
     for (const entry of z.array(messageSchema).max(1000).parse(raw)) {
       if (Date.now() - entry.createdAt > 24 * 60 * 60_000) continue;
+      if (entry.status === 'queued' && !entry.workspaceId) {
+        entry.status = 'cancelled';
+        entry.note = 'Not submitted. Legacy queued target lacked a verified workspace binding; rediscover the intended workspace before creating a new request.';
+      }
       // An interrupted submission may already have reached Paseo. Never replay it.
       if (entry.status === 'submitting') {
         entry.status = 'unknown'; entry.error = 'Service restarted after submission. Check agent activity before sending again.';
@@ -64,17 +70,27 @@ export class Outbox {
   list(owner: string) {
     return [...this.messages.values()].filter(message => message.owner === owner).slice(-30).map(message => this.visible(message));
   }
-  async enqueue(owner: string, requestId: string, agentId: string, prompt: string) {
+  private receipt(message: Message) {
+    return { jobId: message.id, status: message.status, agentId: message.agentId,
+      workspaceId: message.workspaceId, workspaceName: message.workspaceName,
+      delivery: message.submittedAt || ['accepted', 'waiting', 'completed', 'permission'].includes(message.status) ? 'accepted' : message.status === 'unknown' ? 'uncertain' : 'not_submitted',
+      note: message.note,
+      instruction: message.status === 'queued' ? 'Saved in the local queue only; not delivered to the workspace. State the queue reason. Do not retry or imply the agent has received it.' : 'Report only this receipt state. A submitted message is not completed work.',
+    };
+  }
+  async enqueue(owner: string, requestId: string, agentId: string, prompt: string, target: { workspaceId: string; workspaceName: string }): Promise<MessageReceipt> {
     const id = createHash('sha256').update(`${owner}\0${requestId}`).digest('hex');
     const existing = this.get(owner, id);
-    if (existing) return { jobId: id, status: existing.status, agentId };
+    if (existing) return this.receipt(this.messages.get(id)!);
+    const duplicate = [...this.messages.values()].find(message => message.owner === owner && message.workspaceId === target.workspaceId && message.agentId === agentId && message.prompt.trim() === prompt.trim() && ['queued', 'submitting', 'accepted', 'waiting'].includes(message.status));
+    if (duplicate) return this.receipt(duplicate);
     for (const [key, message] of this.messages) if (Date.now() - message.createdAt > 24 * 60 * 60_000 && !this.active.has(message.agentId)) this.messages.delete(key);
     if (this.messages.size >= 500) return { error: 'Outbox capacity reached. Clear or finish pending messages first.' };
-    const message: Message = { id, owner, agentId, prompt, status: 'queued', createdAt: Date.now() };
+    const message: Message = { id, owner, agentId, prompt, ...target, status: 'queued', createdAt: Date.now(), note: 'Not submitted: waiting to verify target availability.' };
     this.messages.set(id, message);
     await this.save();
     await this.tick();
-    return { jobId: id, status: message.status, agentId };
+    return this.receipt(message);
   }
   async cancel(owner: string, id: string) {
     const message = this.messages.get(id);
@@ -136,11 +152,32 @@ export class Outbox {
       for (const message of this.messages.values()) {
         if (message.status !== 'queued') continue;
         if (Date.now() - message.createdAt > 30 * 60_000) { this.transition(message, 'expired'); await this.save(); continue; }
-        if (this.active.has(message.agentId) || pendingAgents.has(message.agentId)) continue;
+        if (this.active.has(message.agentId) || pendingAgents.has(message.agentId)) {
+          const note = 'Not submitted: an earlier request for this agent is still awaiting a reply. Waiting without resubmitting it.';
+          if (message.note !== note) { message.note = note; await this.save(); }
+          continue;
+        }
         const agent = this.paseo.agents.ref(message.agentId);
         try { if (!await agent.refresh() || agent.archivedAt) { this.transition(message, 'error'); message.error = 'Agent is unavailable or archived.'; await this.save(); continue; } }
-        catch { continue; } // Connection loss leaves the durable message queued.
-        if (message.status !== 'queued' || agent.status !== 'idle' || agent.pendingPermissions?.length) continue;
+        catch {
+          const note = 'Not submitted: target availability could not be checked. The local queue will retry discovery, not message submission.';
+          if (message.note !== note) { message.note = note; await this.save(); this.report({ event: 'outbox_deferred', jobId: message.id, code: 'target_unavailable' }); }
+          continue;
+        }
+        if (message.status !== 'queued') continue;
+        if (!message.workspaceId || agent.workspaceId !== message.workspaceId) {
+          this.transition(message, 'cancelled'); message.note = 'Not submitted: the agent no longer belongs to the verified target workspace. Refresh the overview; do not automatically retarget.';
+          await this.save(); continue;
+        }
+        if (agent.status !== 'idle' || agent.pendingPermissions?.length) {
+          const note = agent.pendingPermissions?.length ? 'Not submitted: the workspace agent is awaiting permission.' : 'Not submitted: the workspace agent is busy. Waiting for idle without interrupting its work.';
+          if (message.note !== note) {
+            message.note = note; await this.save();
+            this.report({ event: 'outbox_deferred', jobId: message.id, code: agent.pendingPermissions?.length ? 'permission_pending' : 'agent_busy' });
+          }
+          continue;
+        }
+        delete message.note;
         this.active.add(message.agentId);
         this.transition(message, 'submitting');
         try {
