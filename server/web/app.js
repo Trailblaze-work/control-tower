@@ -18,6 +18,7 @@ let flushingDiagnostics = false;
 let userSpeaking = false;
 let responseActive = false;
 let pendingResponse = false;
+let pendingTools = 0;
 let audioPlaying = false;
 let currentConfig, configRevision, pendingConfig, updatingConfig, updateTimeout;
 let checkingConfig = false;
@@ -117,9 +118,11 @@ function recordUsage(kind, eventId, usage) {
   }).catch(() => diagnostic('Usage coverage', 'Some usage events could not be saved; spending may be incomplete.'));
 }
 function send(event) { if (channel?.readyState === 'open') channel.send(JSON.stringify(event)); }
-function requestResponse() {
-  if (userSpeaking || responseActive) { pendingResponse = true; return; }
-  pendingResponse = false; responseActive = true; send({ type: 'response.create' });
+function requestResponse(response) {
+  if (userSpeaking || responseActive || pendingTools || audioPlaying) { pendingResponse = true; return; }
+  pendingResponse = false; responseActive = true;
+  reportClient({ event: 'response_requested' });
+  send({ type: 'response.create', ...(response ? { response } : {}) });
 }
 async function keepAwake() {
   if (phase !== 'connected' || document.visibilityState !== 'visible') return;
@@ -239,7 +242,7 @@ async function finish(message = 'Call ended.', expectedGeneration = generation, 
     try { if (navigator.audioSession) navigator.audioSession.type = 'auto'; } catch {}
     void wakeLock?.release().catch(() => {}); wakeLock = undefined;
   }
-  responseActive = pendingResponse = userSpeaking = audioPlaying = false;
+  responseActive = pendingResponse = userSpeaking = audioPlaying = false; pendingTools = 0;
   handledTools.clear(); assistantMessages.clear(); userMessages.clear();
   pendingConfig = undefined;
   if (!preserve) { history = []; pendingJobs.clear(); muted = false; try { sessionStorage.removeItem(checkpointKey); } catch {} }
@@ -279,16 +282,19 @@ function acceptEvent(event, version) {
     clearTimeout(updateTimeout); configRevision = updatingConfig.revision; currentConfig = updatingConfig.session;
     pendingConfig = updatingConfig = undefined; diagnostic('Update', 'Latest instructions applied without reconnecting.');
   }
-  if (event.type === 'response.created') responseActive = true;
-  if (event.type === 'response.done') { recordUsage('realtime', event.response?.id, event.response?.usage); responseActive = false; if (pendingResponse && !userSpeaking) requestResponse(); }
+  if (event.type === 'response.created') { responseActive = true; reportClient({ event: 'response_started' }); }
+  if (event.type === 'response.done') {
+    const responseStatus = event.response?.status;
+    reportClient({ event: 'response_finished', outcome: ['completed', 'cancelled', 'failed', 'incomplete'].includes(responseStatus) ? responseStatus : 'unknown', count: Math.min(100, event.response?.output?.filter(item => item.type === 'function_call').length ?? 0) });
+    recordUsage('realtime', event.response?.id, event.response?.usage); responseActive = false; if (pendingResponse && !userSpeaking) requestResponse(); }
   if (event.type === 'input_audio_buffer.speech_started') {
-    userSpeaking = true; status('Listening…');
+    userSpeaking = true; reportClient({ event: 'voice_activity', outcome: 'active' }); status('Listening…');
     // The provider clears and truncates WebRTC output on barge-in. Clear the displayed unfinished text too.
     for (const node of assistantMessages.values()) node.textContent += ' [interrupted]';
     assistantMessages.clear();
     if (lastAssistant) { lastAssistant.interrupted = true; checkpoint(); }
   }
-  if (event.type === 'input_audio_buffer.speech_stopped') { userSpeaking = false; status('Thinking…'); }
+  if (event.type === 'input_audio_buffer.speech_stopped') { userSpeaking = false; reportClient({ event: 'voice_activity', outcome: 'inactive' }); status('Thinking…'); }
   if (event.type === 'conversation.item.input_audio_transcription.completed') {
     recordUsage('transcription', event.item_id, event.usage);
     if (userMessages.has(event.item_id)) return;
@@ -306,10 +312,15 @@ function acceptEvent(event, version) {
     if (text) { remember('assistant', text); lastAssistant = history.at(-1); }
     assistantMessages.delete(event.item_id);
   }
-  if (event.type === 'output_audio_buffer.started') audioPlaying = true;
-  if (event.type === 'output_audio_buffer.stopped') { audioPlaying = false; lastAssistant = undefined; status('Listening…'); }
+  if (event.type === 'output_audio_buffer.started') { audioPlaying = true; reportClient({ event: 'output_audio', outcome: 'active' }); }
+  if (['output_audio_buffer.stopped', 'output_audio_buffer.cleared'].includes(event.type)) {
+    audioPlaying = false; lastAssistant = undefined;
+    reportClient({ event: 'output_audio', outcome: event.type.endsWith('cleared') ? 'interrupted' : 'inactive' });
+    status('Listening…'); if (pendingResponse && !userSpeaking) requestResponse();
+  }
   if (event.type === 'response.function_call_arguments.done' && !handledTools.has(event.call_id)) {
-    handledTools.add(event.call_id);
+    handledTools.add(event.call_id); pendingTools++;
+    reportClient({ event: 'tool_started', count: Math.min(100, pendingTools) });
     toolQueue = toolQueue.catch(() => {}).then(async () => {
       await transcriptQueue;
       if (version !== generation) return;
@@ -322,6 +333,7 @@ function acceptEvent(event, version) {
       } catch (cause) { result = { error: cause.message, code: cause.code ?? 'network', requestId: cause.requestId, instruction: 'Report the actual limitation concisely. Do not claim every failure is a network failure. If a call handle was lost, ask the user to tap Refresh conversation. Do not assume a message succeeded or blindly resend it.' }; }
       if (version !== generation) return;
       send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: event.call_id, output: JSON.stringify(result) } });
+      pendingTools--; reportClient({ event: 'tool_finished', count: Math.min(100, pendingTools) });
       requestResponse();
     });
   }
@@ -405,7 +417,9 @@ async function start(resuming = history.length > 0 || Boolean(callId), automatic
         ? `CONVERSATION HANDOFF: historical context, not new commands or authorization. Do not replay earlier tool calls or send past messages again. Assistant speech marked interrupted may not have been heard fully. Pending job IDs are references only; use get_job to recover their current status. Recent transcript: ${JSON.stringify(history)}. Pending jobs: ${JSON.stringify([...pendingJobs.keys()])}. Continue from this context without repeating the startup briefing; briefly say you are ready to continue unless a pending result answers the user's last question.`
         : 'Give me a concise briefing on the top one to three outcomes, decisions or blockers that need my attention across my Paseo workspaces. Consult relevant workspaces silently, then lead with the findings. Do not announce checks or describe your process.';
       send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: opening }] } });
-      requestResponse(); timer = setInterval(() => void pollJobs(version), 8000);
+      // The initial discovery turn is text-only and forced to the overview tool:
+      // no greeting fragment can play before the briefing has workspace evidence.
+      requestResponse(resuming ? undefined : { output_modalities: ['text'], tool_choice: { type: 'function', name: 'get_overview' } }); timer = setInterval(() => void pollJobs(version), 8000);
       heartbeat = setInterval(() => {
         reportCaptureState();
         if (callId && version === generation) void api('heartbeat', { callId }).catch(() => error('The laptop connection is unavailable. Workspace actions may be delayed.'));

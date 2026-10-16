@@ -55,10 +55,10 @@ export function voiceServer(options: ServerOptions) {
   const report = options.report ?? silent;
   const localHosts = new Set([`localhost:${options.port}`, `127.0.0.1:${options.port}`]);
   const diagnosticLimits = new Map<string, { since: number; count: number }>();
-  const browserEvent = z.object({ event: z.enum(['api_failure', 'webrtc_state', 'provider_error', 'session_connected', 'session_closed', 'page_hidden', 'page_visible', 'config_applied', 'recovery_attempt', 'recovery_succeeded', 'recovery_stopped', 'microphone_ended', 'microphone_muted', 'microphone_unmuted', 'capture_state', 'audio_interrupted', 'system_hangup', 'system_stop', 'client_loaded', 'system_control', 'audio_state', 'playback_pause', 'playback_ended', 'end_requested', 'end_cleaned', 'page_exit']),
+  const browserEvent = z.object({ event: z.enum(['api_failure', 'webrtc_state', 'provider_error', 'session_connected', 'session_closed', 'page_hidden', 'page_visible', 'config_applied', 'recovery_attempt', 'recovery_succeeded', 'recovery_stopped', 'microphone_ended', 'microphone_muted', 'microphone_unmuted', 'capture_state', 'audio_interrupted', 'system_hangup', 'system_stop', 'client_loaded', 'system_control', 'audio_state', 'playback_pause', 'playback_ended', 'end_requested', 'end_cleaned', 'page_exit', 'response_requested', 'response_started', 'response_finished', 'voice_activity', 'output_audio', 'tool_started', 'tool_finished']),
     clientRevision: z.string().regex(/^[a-f0-9]{12}$/).optional(), clientId: z.string().uuid().optional(), occurredAt: z.number().int().min(0).optional(),
     action: z.enum(['hangup', 'stop', 'media_session', 'audio_session', 'microphone_state', 'page', 'button']).optional(),
-    outcome: z.enum(['registered', 'unsupported', 'active', 'inactive', 'interrupted', 'unknown', 'native']).optional(),
+    outcome: z.enum(['registered', 'unsupported', 'active', 'inactive', 'interrupted', 'unknown', 'native', 'completed', 'cancelled', 'failed', 'incomplete']).optional(),
     count: z.number().int().min(0).max(100).optional(),
     operation: z.enum(['status', 'config', 'tool', 'transcript', 'session', 'heartbeat', 'usage', 'end', 'pair', 'webrtc', 'page']).optional(),
     status: z.number().int().min(0).max(599).optional(), durationMs: z.number().min(0).max(3600000).optional(),
@@ -156,7 +156,8 @@ export function voiceServer(options: ServerOptions) {
         if (diagnosticLimits.size > 1000) diagnosticLimits.clear();
         const limit = diagnosticLimits.get(owner) ?? { since: Date.now(), count: 0 };
         if (Date.now()-limit.since > 60000) { limit.since = Date.now(); limit.count = 0; }
-        if (++limit.count > 120) throw new HttpError(429, 'Diagnostic rate limit'); diagnosticLimits.set(owner, limit);
+        // Include bounded response/tool/audio lifecycle events during busy calls.
+        if (++limit.count > 300) throw new HttpError(429, 'Diagnostic rate limit'); diagnosticLimits.set(owner, limit);
         const parsed = browserEvent.safeParse(parseJson(await body(req, 2000)));
         if (!parsed.success) throw new HttpError(400, 'Invalid diagnostic event');
         report({ ...parsed.data, event: `browser_${parsed.data.event}`, requestId }); json(res, 200, { recorded: true }); return;

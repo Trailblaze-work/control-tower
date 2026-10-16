@@ -86,6 +86,37 @@ test('browser preserves audio capture and context across reception loss, updates
   assert.ok(diagnostics.some(entry => entry.event === 'browser_system_control' && entry.action === 'hangup' && entry.outcome === 'registered'));
   await page.evaluate(() => document.querySelector('#speaker').dispatchEvent(new Event('pause')));
   assert.equal(await page.getByRole('button', { name: 'End call', exact: true }).isVisible(), true, 'generic audio pause does not end calls');
+  const firstResponse = await page.evaluate(() => window.sentEvents.find(event => event.type === 'response.create'));
+  assert.deepEqual(firstResponse.response, { output_modalities: ['text'], tool_choice: { type: 'function', name: 'get_overview' } }, 'startup discovery cannot speak a false greeting');
+  const responsesBeforeBatch = await page.evaluate(() => window.sentEvents.filter(event => event.type === 'response.create').length);
+  let releaseFirst, releaseSecond;
+  const firstGate = new Promise(resolve => { releaseFirst = resolve; });
+  const secondGate = new Promise(resolve => { releaseSecond = resolve; });
+  let firstWaiting = false, secondWaiting = false;
+  const batchRoute = async route => {
+    const id = route.request().postDataJSON().invocationId;
+    if (id === 'batch-first') { firstWaiting = true; await firstGate; }
+    else if (id === 'batch-second') { secondWaiting = true; await secondGate; }
+    else return route.continue();
+    return route.fulfill({ json: { observed: true } });
+  };
+  await page.route('**/api/tool', batchRoute);
+  await page.evaluate(() => {
+    const channel = window.channels.at(-1);
+    channel.emit({ type: 'response.created' });
+    channel.emit({ type: 'output_audio_buffer.started' });
+    for (const call_id of ['batch-first', 'batch-second']) channel.emit({ type: 'response.function_call_arguments.done', call_id, name: 'get_overview', arguments: '{}' });
+    channel.emit({ type: 'response.done', response: { status: 'completed' } });
+  });
+  await page.waitForTimeout(30); assert.equal(firstWaiting, true);
+  releaseFirst(); await page.waitForFunction(() => window.sentEvents.some(event => event.item?.call_id === 'batch-first'));
+  await page.waitForTimeout(30); assert.equal(secondWaiting, true);
+  assert.equal(await page.evaluate(() => window.sentEvents.filter(event => event.type === 'response.create').length), responsesBeforeBatch, 'one tool result cannot trigger a partial response while another is pending');
+  releaseSecond(); await page.waitForFunction(() => window.sentEvents.some(event => event.item?.call_id === 'batch-second'));
+  assert.equal(await page.evaluate(() => window.sentEvents.filter(event => event.type === 'response.create').length), responsesBeforeBatch, 'generation completion does not mean audible playback has finished');
+  await page.evaluate(() => window.channels.at(-1).emit({ type: 'output_audio_buffer.stopped' }));
+  await page.waitForFunction(count => window.sentEvents.filter(event => event.type === 'response.create').length === count + 1, responsesBeforeBatch);
+  await page.unroute('**/api/tool', batchRoute);
   await page.evaluate(() => window.channels.at(-1).emit({ type: 'response.function_call_arguments.done', call_id: 'rename-draft', name: 'request_workspace_rename', arguments: JSON.stringify({ workspaceId: 'w', title: 'Review', reason: 'Clarity' }) }));
   await page.waitForFunction(() => document.querySelector('#workspace-request-list li'));
   assert.match(await page.locator('#workspace-request-list').textContent(), /<img src=x onerror=alert\(1\)> — not applied/);

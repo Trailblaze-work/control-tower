@@ -133,6 +133,8 @@ Or open **Diagnostics** in laptop settings. Private structured logs live at `~/.
 - **Provider rejection:** check key/model access, credit and rate limits. Audio generation is an external API even when the coordinator is local.
 - **Empty recent activity:** the current bounded page may contain tools rather than prose; diagnostics distinguish this from a read error.
 
+Startup discovery uses a text-only, forced overview call before generating the spoken briefing. Tool results are collected before requesting one continuation, which also waits for current audio playback to finish. Content-free response, tool, voice-activity and audio-buffer events distinguish a tool pause, barge-in and transport recovery. This does not disable interruptions or change microphone recovery and system hangup handling.
+
 The intermittent failure that motivated these diagnostics was not reproduced during local investigation; workspace overview/history reads succeeded. A confirmed misleading-error path was corrected, and diagnostics now make future occurrences attributable instead of reporting every failure as an unreachable laptop.
 
 ## Mobile reception and CarPlay
