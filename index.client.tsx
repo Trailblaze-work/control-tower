@@ -1,11 +1,12 @@
 import type { PluginClientContext, PluginSidebarItemProps } from '@getpaseo/plugin/client';
 import { SidebarRow } from '@getpaseo/plugin/client/ui';
-import { VoiceScreen } from './client/voice';
-function VoiceItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
-  return <SidebarRow icon="Mic" active={currentScreen?.screenId === 'voice'} onPress={() => openScreen({ screenId: 'voice' })} />;
+import { TowerIcon } from './client/tower-icon';
+import { TowerScreen } from './client/tower';
+function TowerItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
+  return <SidebarRow icon={TowerIcon} label="Tower" active={currentScreen?.screenId === 'tower'} onPress={() => openScreen({ screenId: 'tower' })} />;
 }
 export default function contribute(client: PluginClientContext) {
-  client.addScreen({ id: 'voice', title: 'Voice coordinator', Component: VoiceScreen });
-  client.addSidebarHeaderItem({ id: 'voice', title: 'Voice coordinator', Component: VoiceItem });
+  client.addScreen({ id: 'tower', title: 'Tower', Component: TowerScreen });
+  client.addSidebarHeaderItem({ id: 'tower', title: 'Tower', Component: TowerItem });
   return () => {};
 }

@@ -1,5 +1,5 @@
 {
-  "name": "paseo-voice",
+  "name": "tower",
   "private": true,
   "version": "0.0.0",
   "files": [
@@ -13,7 +13,8 @@
     "server/",
     "shared/",
     "README.md",
-    "scripts/"
+    "scripts/",
+    "assets/"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
@@ -43,12 +44,12 @@
     "zod": "^4.4.3"
   },
   "type": "module",
-  "description": "Laptop-hosted live voice coordinator for Paseo workspaces",
+  "description": "Your agents, on frequency. A live voice control tower for Paseo.",
   "engines": {
     "node": ">=24.0.0"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Trailblaze-work/paseo-voice.git"
+    "url": "git+https://github.com/Trailblaze-work/tower.git"
   }
 }

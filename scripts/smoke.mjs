@@ -3,9 +3,9 @@
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
-import { launchVoice } from '../server/launch.ts';
+import { launchTower } from '../server/launch.ts';
 
-const links = await launchVoice();
+const links = await launchTower();
 const browser = await chromium.launch({
   headless: true,
   executablePath: process.env.CHROME_BIN ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',

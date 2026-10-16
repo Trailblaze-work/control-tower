@@ -1,2 +1,2 @@
-import { launchVoice } from '../server/launch.ts';
-console.log((await launchVoice()).settingsUrl);
+import { launchTower } from '../server/launch.ts';
+console.log((await launchTower()).settingsUrl);

@@ -4,11 +4,12 @@ import { ExternalLink } from '@getpaseo/plugin/client/ui';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { Pressable, Text, View } from 'react-native';
+import { TowerIcon } from './tower-icon';
 import { launchRpc, launchStatusRpc } from '../shared/launch';
-export function VoiceScreen({ theme, layout, host }: PluginScreenProps) {
+export function TowerScreen({ theme, layout, host }: PluginScreenProps) {
   const launch = useRpc(launchRpc);
   const checkStatus = useRpc(launchStatusRpc);
-  const link = useQuery({ queryKey: ['paseo-voice-launch', host.id], queryFn: () => launch({}), staleTime: 0, refetchInterval: 45000, retry: false });
+  const link = useQuery({ queryKey: ['tower-launch', host.id], queryFn: () => launch({}), staleTime: 0, refetchInterval: 45000, retry: false });
   const { data, refetch } = link;
   useEffect(() => {
     if (!data) return;
@@ -27,10 +28,11 @@ export function VoiceScreen({ theme, layout, host }: PluginScreenProps) {
   }, [data, checkStatus, refetch]);
   const text = { color: theme.colors.foreground };
   return <View style={{ padding: layout.compact ? 16 : 24, gap: 20, backgroundColor: theme.colors.surface0, flex: 1 }}>
-    <Text style={{ ...text, fontSize: 24, fontWeight: '600' }}>Talk through your work.</Text>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}><TowerIcon size={56} /><Text style={{ ...text, fontSize: 28, fontWeight: '600' }}>Tower</Text></View>
+    <Text style={text}>Your agents, on frequency.</Text>
     <Text style={text}>Start a live conversation with your workspace coordinator. The call page runs on your laptop and opens in your browser.</Text>
     {link.isPending && <Text style={text}>Preparing your private call link…</Text>}
-    {link.error && <Text accessibilityRole="alert" style={text}>Start the Paseo Voice service on your laptop, then refresh this link.</Text>}
+    {link.error && <Text accessibilityRole="alert" style={text}>Start the Tower service on your laptop, then refresh this link.</Text>}
     {link.data && <>
       <ExternalLink href={link.data.url}>Talk on this device</ExternalLink>
       <ExternalLink href={link.data.localUrl}>Talk locally on the laptop</ExternalLink>

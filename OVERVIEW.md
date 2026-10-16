@@ -1,4 +1,4 @@
-Paseo Voice lets you talk continuously with a coordinator about your workspaces. Ask what needs your attention, get an explanation, consult relevant workspace agents, or relay authorized instructions without repeated confirmation. You can interrupt the coordinator while it speaks.
+Tower lets you talk continuously with a coordinator about your workspaces. Ask what needs your attention, get an explanation, consult relevant workspace agents, or relay authorized instructions without repeated confirmation. You can interrupt the coordinator while it speaks.
 
 The sidebar opens a companion browser call page. Desktop calls can use localhost; phone calls use an anonymous Cloudflare tunnel that runs on your laptop. The current tunnel address is discovered automatically. The laptop must stay awake and online. OpenAI handles live audio over WebRTC using a server-side API key; API usage is billed by OpenAI.
 

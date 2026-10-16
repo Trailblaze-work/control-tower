@@ -27,4 +27,4 @@ const domain = `gui/${process.getuid!()}`;
 spawnSync('launchctl', ['bootout', domain, destination], { stdio: 'ignore' });
 const result = spawnSync('launchctl', ['bootstrap', domain, destination], { stdio: 'inherit' });
 if (result.status !== 0) throw new Error('Could not register the background service. Run npm run serve to start it in a terminal.');
-console.log('Paseo Voice background service installed. Its temporary tunnel address updates automatically.');
+console.log('Tower background service installed. Its temporary tunnel address updates automatically.');

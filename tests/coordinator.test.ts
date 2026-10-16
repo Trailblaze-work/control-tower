@@ -124,15 +124,15 @@ test('workspace requests require discovery and metadata and never execute mutati
 
 test('owner-enabled title renames require a fresh user turn and deduplicate actual writes', async () => {
   const f = fixture(async () => true);
-  const args = { workspaceId: 'w', title: 'Paseo Voice', reason: 'User requested a clearer title' };
+  const args = { workspaceId: 'w', title: 'Tower', reason: 'User requested a clearer title' };
   await f.coordinator.invoke(f.call, 'overview', 'get_overview', {});
   const blocked = await f.coordinator.invoke(f.call, 'startup', 'request_workspace_rename', args) as { error: string };
   assert.match(blocked.error, /current call/); assert.equal(f.renameWrites.length, 0);
-  recordUtterance(f.call, 'Rename the billing workspace to Paseo Voice');
+  recordUtterance(f.call, 'Rename the billing workspace to Tower');
   const result = await f.coordinator.invoke(f.call, 'rename', 'request_workspace_rename', args) as { status: string; title: string; executed: boolean };
-  assert.equal(result.status, 'completed'); assert.equal(result.title, 'Paseo Voice'); assert.equal(result.executed, true);
+  assert.equal(result.status, 'completed'); assert.equal(result.title, 'Tower'); assert.equal(result.executed, true);
   assert.deepEqual(await f.coordinator.invoke(f.call, 'rename', 'request_workspace_rename', args), result);
-  assert.deepEqual(f.renameWrites, ['Paseo Voice']); assert.equal(f.sent.length, 0);
+  assert.deepEqual(f.renameWrites, ['Tower']); assert.equal(f.sent.length, 0);
   const same = await f.coordinator.invoke(f.call, 'same-title', 'request_workspace_rename', args) as { executed: boolean };
   assert.equal(same.executed, false); assert.equal(f.renameWrites.length, 1);
 });

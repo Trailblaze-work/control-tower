@@ -159,7 +159,7 @@ function systemCallControls(active) {
   } catch { if (active) reportClient({ event: 'system_control', action: 'stop', outcome: 'unsupported' }); }
   try { session.playbackState = active ? 'playing' : 'none'; } catch {}
   try { session.setMicrophoneActive?.(active && !muted); if (active) reportClient({ event: 'system_control', action: 'microphone_state', outcome: session.setMicrophoneActive ? 'registered' : 'unsupported' }); } catch { if (active) reportClient({ event: 'system_control', action: 'microphone_state', outcome: 'unsupported' }); }
-  try { session.metadata = active && typeof MediaMetadata !== 'undefined' ? new MediaMetadata({ title: 'Paseo Voice', artist: 'Workspace coordinator' }) : null; } catch {}
+  try { session.metadata = active && typeof MediaMetadata !== 'undefined' ? new MediaMetadata({ title: 'Tower', artist: 'Workspace coordinator' }) : null; } catch {}
   if (!active) ownsSystemControls = false;
   diagnostic('Car controls', active ? `Registered ${supported.join(' / ')}; device forwarding needs verification.` : 'Inactive');
 }

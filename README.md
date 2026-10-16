@@ -1,4 +1,8 @@
-# Paseo Voice
+# Tower
+
+<p align="center"><img src="assets/tower.svg" width="176" height="176" alt="Tower logo"></p>
+
+<p align="center"><strong>Your agents, on frequency.</strong></p>
 
 A laptop-hosted, interruptible voice coordinator for [Paseo](https://paseo.sh). Talk through progress, blockers and decisions across your workspaces, consult the owning agents, and relay routine instructions without opening each conversation.
 
@@ -30,8 +34,8 @@ The Paseo sidebar opens a companion call page. Desktop calls use localhost; phon
 ## Quick start
 
 ```sh
-gh repo clone Trailblaze-work/paseo-voice
-cd paseo-voice
+gh repo clone Trailblaze-work/tower
+cd tower
 npm ci
 npm run serve
 ```
@@ -44,7 +48,7 @@ npm run link
 
 Open the link on your phone in Safari, allow microphone access and tap **Start conversation**. On the laptop, use the local link in the Paseo sidebar. You can interrupt the coordinator while it speaks. **Mute** disables microphone capture; **End call** stops the conversation. Closing the page disconnects its WebRTC transport, although already-submitted workspace work and queued updates may continue.
 
-Install this checkout as a local directory plugin through [Paseo’s plugin settings](https://paseo.sh/docs/plugins), then open **Voice coordinator** in the sidebar. Enabling the global plugin switch is an explicit user action; automated setup must obtain authorization first. The sidebar refreshes used links within about three seconds and unused links every 45 seconds. Links are single-use, expire after one minute and establish 12-hour browser pairing.
+Install this checkout as a local directory plugin through [Paseo’s plugin settings](https://paseo.sh/docs/plugins), then open **Tower** in the sidebar. Enabling the global plugin switch is an explicit user action; automated setup must obtain authorization first. The sidebar refreshes used links within about three seconds and unused links every 45 seconds. Links are single-use, expire after one minute and establish 12-hour browser pairing.
 
 ### Configure your API key
 
@@ -141,7 +145,7 @@ This repairs the app's confirmed hangup path: a logged disconnect on 2026-10-15 
 
 When the browser supports the Media Session `hangup` action, the page registers it and `stop`, routing both through End call. It publishes generic call metadata/microphone state and clears its handlers on exit. When `hangup` is rejected, the page leaves native browser command handling, metadata and microphone state alone instead of registering only `stop`. WebKit's [Media Session implementation](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/Modules/mediasession/MediaSession.cpp) gates `hangup` separately; successful registration of `stop` is insufficient evidence of CarPlay call-button support.
 
-The 2026-10-16 07:49 UTC device test loaded the current page and logged `hangup: unsupported`, `stop: registered`, no delivered system action, and successful microphone cleanup after the page's End button. The user's report that native hangup worked before recovery hardening suggests a regression, but the logs do not identify its exact native event. The fallback now avoids custom control takeover on that browser. It also respects capture ending: an `ended` microphone track ends the call with saved context and requires an explicit **Resume conversation** tap. Recovery never automatically reopens ended capture. Temporary track mute, playback pause and audio interruption remain nonterminal, and network-only drops still recover with a live microphone. Native CarPlay behavior requires another device test; these changes do not establish a confirmed physical-button fix.
+A real-device regression test loaded the current page and logged `hangup: unsupported`, `stop: registered`, no delivered system action, and successful microphone cleanup after the page's End button. A report that native hangup worked before recovery hardening suggests a regression, but the logs do not identify its exact native event. The fallback now avoids custom control takeover on that browser. It also respects capture ending: an `ended` microphone track ends the call with saved context and requires an explicit **Resume conversation** tap. Recovery never automatically reopens ended capture. Temporary track mute, playback pause and audio interruption remain nonterminal, and network-only drops still recover with a live microphone. Native CarPlay behavior requires another device test; these changes do not establish a confirmed physical-button fix.
 
 Check **Connection details → Car controls** for the selected mode and **Page revision** to verify a reload. Diagnostics record action support/receipt, ephemeral page ID and script revision, audio state, page exit, End cleanup, microphone mute/unmute/end, and changed capture-state flags (live=1, muted=2, enabled=4, speaker paused=8). They contain no audio, device names or transcript. Up to 30 events buffer in page memory offline, with original event times; delivery is not guaranteed if the page is closed. Submissions are capped at 120 per minute per paired browser. Reload the page after a browser-code update; prompt refresh cannot replace JavaScript already loaded. Use the page's End control when safe if native hangup still fails. Guaranteed native call-control integration may require platform support beyond this companion page.
 
@@ -180,4 +184,10 @@ npm test
 
 Tests cover authentication/ownership, origin restrictions, discovery, queue ordering/recovery, PR mappings, gated title renames and non-executing creation proposals, error classification, key privacy, cost arithmetic and browser refresh/settings flows. They use simulated media/provider responses and do not incur model charges or message real workspace agents. Hosted GitHub Actions runs these checks with Node 24 and Chromium.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). `npm run smoke:live` is an explicit, billable integration check against real services; it is not part of CI. This repository is private; no public license or distribution grant is included.
+See [CONTRIBUTING.md](CONTRIBUTING.md). `npm run smoke:live` is an explicit, billable integration check against real services; it is not part of CI. This repository is public. No open-source license has been selected; public visibility alone does not grant redistribution or other license rights.
+
+## Branding and upgrades
+
+Tower was previously called Paseo Voice. The plugin ID is now `tower`; remove the old plugin entry and install this checkout again if upgrading. Existing installations retain `~/.paseo/voice/`, `PASEO_VOICE_*`, the `paseo_voice` cookie and the browser checkpoint key so keys, spending records and resumable calls are preserved. The existing macOS service label also remains `dev.paseo.voice`; these compatibility identifiers are intentional. No daemon restart is needed to reload the plugin.
+
+The [vector logo](assets/tower.svg) was generated using Recraft V4.1 Pro Vector through OpenRouter. Its [branding notes](assets/BRAND.md) record the model and prompt. The PNG sidebar icon is rendered from that same SVG for native image compatibility. OpenRouter is used only to create the branding; running Tower still requires an OpenAI key for live calls.

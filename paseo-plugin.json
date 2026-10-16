@@ -1,6 +1,6 @@
 {
-  "id": "paseo-voice",
-  "description": "Talk to a laptop-hosted coordinator about your Paseo workspaces.",
+  "id": "tower",
+  "description": "Tower \u2014 your agents, on frequency. Live voice coordination for Paseo workspaces.",
   "requirements": {
     "paseo": ">=0.11.2 <0.12.0"
   }

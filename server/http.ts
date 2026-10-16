@@ -75,7 +75,7 @@ export function voiceServer(options: ServerOptions) {
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Permissions-Policy', 'microphone=(self), camera=()');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
     try {
       if (!hosts.has(req.headers.host ?? '')) throw new HttpError(403, 'Unrecognized host');
       const path = new URL(req.url ?? '/', 'http://localhost').pathname;
@@ -85,11 +85,11 @@ export function voiceServer(options: ServerOptions) {
         if (req.headers.origin && !origins.has(req.headers.origin)) throw new HttpError(403, 'Unrecognized origin');
         if (req.headers['sec-fetch-site'] === 'cross-site') throw new HttpError(403, 'Cross-site request rejected');
       }
-      if (req.method === 'GET' && ['/', '/app.js', '/session-state.js', '/style.css', '/settings', '/settings.js'].includes(path)) {
+      if (req.method === 'GET' && ['/', '/app.js', '/tower.svg', '/session-state.js', '/style.css', '/settings', '/settings.js'].includes(path)) {
         if (path.startsWith('/settings') && !localHosts.has(req.headers.host!)) throw new HttpError(403, 'Settings are available only on the laptop.');
         const name = path === '/' ? 'index.html' : path === '/settings' ? 'settings.html' : path.slice(1);
-        const content = await readFile(new URL(`./web/${name}`, import.meta.url));
-        res.writeHead(200, { 'Content-Type': name.endsWith('.html') ? 'text/html; charset=utf-8' : name.endsWith('.js') ? 'text/javascript' : 'text/css' });
+        const content = await readFile(new URL(name === 'tower.svg' ? '../assets/tower.svg' : `./web/${name}`, import.meta.url));
+        res.writeHead(200, { 'Content-Type': name.endsWith('.html') ? 'text/html; charset=utf-8' : name.endsWith('.js') ? 'text/javascript' : name.endsWith('.svg') ? 'image/svg+xml' : 'text/css' });
         res.end(name === 'app.js' ? content.toString().replace('__VOICE_CLIENT_REVISION__', createHash('sha256').update(content).digest('hex').slice(0, 12)) : content); return;
       }
       if (req.method === 'POST' && path === '/api/launch') {
