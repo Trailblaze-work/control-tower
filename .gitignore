@@ -17,3 +17,4 @@ state.json
 browser-sessions.json
 outbox.json
 usage.json
+calls.json

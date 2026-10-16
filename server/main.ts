@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { Settings } from './settings.ts';
 import { UsageLedger } from './usage.ts';
 import { Telemetry } from './telemetry.ts';
+import { Calls } from './calls.ts';
 
 const telemetry = new Telemetry(join(stateDir, 'diagnostics.jsonl'));
 const report = telemetry.report;
@@ -19,6 +20,7 @@ const outbox = new Outbox(paseo, join(stateDir, 'outbox.json'), report); await o
 const access = new Access(join(stateDir, 'browser-sessions.json')); await access.load();
 const settings = new Settings(join(stateDir, 'settings.json'), loadApiKey);
 const usage = new UsageLedger(join(stateDir, 'usage.json')); await usage.load();
+const calls = new Calls(join(stateDir, 'calls.json')); await calls.load();
 report({ event: 'service_started', connection: paseo.getConnectionState().status });
 let lastConnection = paseo.getConnectionState().status;
 const connectionTimer = setInterval(() => {
@@ -26,7 +28,7 @@ const connectionTimer = setInterval(() => {
   if (connection !== lastConnection) { lastConnection = connection; report({ event: 'paseo_connection', connection }); }
 }, 2000);
 const queueTimer = setInterval(() => { void outbox.tick().catch(() => console.error('Outbox update failed; pending messages remain on disk.')); }, 5000);
-const server = voiceServer({ ...state, access, settings, usage, telemetry, report, apiKey: null, getApiKey: () => settings.key(), connection: () => paseo.getConnectionState().status, coordinator: new Coordinator(paseo, outbox, report, async () => (await settings.status()).allowWorkspaceRenames), ready: () => paseo.getConnectionState().status === 'connected' });
+const server = voiceServer({ ...state, access, settings, usage, telemetry, report, calls: calls.entries, saveCalls: () => calls.save(), apiKey: null, getApiKey: () => settings.key(), connection: () => paseo.getConnectionState().status, coordinator: new Coordinator(paseo, outbox, report, async () => (await settings.status()).allowWorkspaceRenames), ready: () => paseo.getConnectionState().status === 'connected' });
 server.on('error', () => { console.error('Could not start voice server. Check whether its port is already in use.'); process.exitCode = 1; void paseo.close(); });
 server.listen(port, '127.0.0.1', () => {
   void persistState(state).then(() => console.log(`Control Tower listening at ${publicUrl}. Run npm run link for a private launch link.`));

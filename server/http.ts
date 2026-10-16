@@ -26,8 +26,10 @@ export interface ServerOptions {
   telemetry?: Telemetry;
   report?: Reporter;
   connection?: () => string;
+  calls?: Map<string, Conversation>;
+  saveCalls?: () => Promise<void>;
 }
-class HttpError extends Error { status: number; constructor(status: number, message: string) { super(message); this.status = status; } }
+class HttpError extends Error { status: number; code?: string; constructor(status: number, message: string, code?: string) { super(message); this.status = status; this.code = code; } }
 async function body(req: IncomingMessage, max = 100_000): Promise<string> {
   const chunks: Buffer[] = []; let size = 0;
   for await (const chunk of req) {
@@ -46,13 +48,17 @@ function parseJson(text: string): Record<string, unknown> {
 }
 
 export function voiceServer(options: ServerOptions) {
-  const access = options.access ?? new Access(); const calls = new Map<string, Conversation>();
+  const access = options.access ?? new Access(); const calls = options.calls ?? new Map<string, Conversation>();
   const origins = new Set([new URL(options.publicUrl).origin, `http://localhost:${options.port}`, `http://127.0.0.1:${options.port}`]);
   const hosts = new Set([...origins].map(origin => new URL(origin).host));
   const providerFetch = options.fetch ?? fetch;
   const getConfig = options.config ?? runtimeConfig;
   const getKey = options.getApiKey ?? (async () => options.apiKey);
   const report = options.report ?? silent;
+  const persistCalls = async () => {
+    try { await options.saveCalls?.(); }
+    catch { report({ event: 'call_persistence', outcome: 'error' }); console.error('Call ownership could not be saved; recovery after a service restart may require reconnecting.'); }
+  };
   const localHosts = new Set([`localhost:${options.port}`, `127.0.0.1:${options.port}`]);
   const diagnosticLimits = new Map<string, { since: number; count: number }>();
   const browserEvent = z.object({ event: z.enum(['api_failure', 'webrtc_state', 'provider_error', 'session_connected', 'session_closed', 'page_hidden', 'page_visible', 'config_applied', 'recovery_attempt', 'recovery_succeeded', 'recovery_stopped', 'microphone_ended', 'microphone_switch', 'microphone_muted', 'microphone_unmuted', 'capture_state', 'audio_interrupted', 'system_hangup', 'system_stop', 'client_loaded', 'system_control', 'audio_state', 'playback_pause', 'playback_ended', 'end_requested', 'end_cleaned', 'page_exit', 'response_requested', 'response_started', 'response_finished', 'voice_activity', 'output_audio', 'tool_started', 'tool_finished']),
@@ -189,6 +195,7 @@ export function voiceServer(options: ServerOptions) {
           const answer = await upstream.text();
           const callId = previousId && previous ? previousId : randomUUID();
           const resumed = previous ?? conversation(owner); resumed.lastSeen = Date.now(); resumed.model = config.session.model; calls.set(callId, resumed);
+          await persistCalls();
           report({ event: 'provider_session', requestId, outcome: previous ? 'resumed' : 'created', durationMs: Date.now()-started });
           res.writeHead(200, { 'Content-Type': 'application/sdp', 'X-Call-Id': callId, 'X-Config-Revision': config.revision }); res.end(answer);
         } finally { creating--; }
@@ -197,16 +204,16 @@ export function voiceServer(options: ServerOptions) {
       if (req.method === 'POST' && ['/api/tool', '/api/transcript', '/api/end', '/api/heartbeat', '/api/usage'].includes(path)) {
         const data = parseJson(await body(req));
         const call = typeof data.callId === 'string' ? calls.get(data.callId) : null;
-        if (!call || call.owner !== owner) throw new HttpError(404, 'Call session lost, possibly after a service restart. Refresh conversation to reconnect with saved context.');
+        if (!call || call.owner !== owner) throw new HttpError(404, 'Call session lost, possibly after a service restart. Refresh conversation to reconnect with saved context.', 'missing_call');
         call.lastSeen = Date.now();
-        if (path === '/api/heartbeat') { json(res, 200, { alive: true }); return; }
+        if (path === '/api/heartbeat') { await persistCalls(); json(res, 200, { alive: true }); return; }
         if (path === '/api/usage' && options.usage) {
           const { callId: _callId, ...usage } = data;
           try { json(res, 200, await options.usage.record(data.callId as string, call.model ?? '', usage)); }
           catch (error) { if (error instanceof z.ZodError) throw new HttpError(400, 'Unsupported usage event'); throw error; }
           return;
         }
-        if (path === '/api/end') { calls.delete(data.callId as string); json(res, 200, { ended: true }); return; }
+        if (path === '/api/end') { calls.delete(data.callId as string); await persistCalls(); json(res, 200, { ended: true }); return; }
         if (path === '/api/transcript') {
           if (typeof data.text !== 'string' || data.text.length > 10000) throw new HttpError(400, 'Invalid transcript');
           recordUtterance(call, data.text); json(res, 200, { recorded: true }); return;
@@ -218,9 +225,10 @@ export function voiceServer(options: ServerOptions) {
       throw new HttpError(404, 'Not found');
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
-      report({ event: 'http_failure', requestId, operation, status, code: errorCode(error), durationMs: Date.now()-started, connection: options.connection?.() });
+      const code = error instanceof HttpError && error.code ? error.code : errorCode(error);
+      report({ event: 'http_failure', requestId, operation, status, code, durationMs: Date.now()-started, connection: options.connection?.() });
       if (res.headersSent) { res.end(); return; }
-      json(res, status, { error: error instanceof HttpError ? error.message : 'Local service operation failed. Check Connection details for the request reference.', requestId, code: errorCode(error) });
+      json(res, status, { error: error instanceof HttpError ? error.message : 'Local service operation failed. Check Connection details for the request reference.', requestId, code });
     }
   });
   server.requestTimeout = 40_000; server.headersTimeout = 10_000;

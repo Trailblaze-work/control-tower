@@ -141,6 +141,7 @@ Or open **Diagnostics** in laptop settings. Private structured logs live at `~/.
 - **401 / expired pairing:** open a fresh sidebar link. A settings page additionally needs a fresh owner settings link.
 - **Paseo disconnected:** confirm the daemon is running. The voice service reconnects independently; do not restart unrelated agents to diagnose it.
 - **RPC timeout / unavailable agent:** inspect the request reference and `paseo_read` stage in diagnostics. Do not blindly retry messages whose delivery is uncertain.
+- **Call handle lost after restart:** current versions persist private call ownership so routine app refreshes preserve an ongoing audio session's workspace access. A genuinely expired or legacy handle requires **Refresh conversation**. Heartbeat warnings distinguish this from an unreachable laptop and clear after successful recovery; reload an older page to receive these changes.
 - **Unreadable HTTP response:** the temporary tunnel may be down or returning an edge error; use the current sidebar link or localhost.
 - **Provider rejection:** check key/model access, credit and rate limits. Audio generation is an external API even when the coordinator is local.
 - **Empty recent activity:** the current bounded page may contain tools rather than prose; diagnostics distinguish this from a read error.

@@ -8,6 +8,8 @@ Key settings, provider billing and administrative diagnostics additionally requi
 
 Keys and runtime state are stored outside the checkout in `~/.paseo/voice/`, with directory mode 0700 and files 0600. These are permission-protected local files, not encrypted storage. Existing environment/key-file configuration remains supported. An optional Admin API key has broader billing privileges; use a dedicated project filter where practical. Provider billing totals can cover other applications and are not added to the plugin estimate.
 
+Private `calls.json` records call ownership, model and lease timestamps so service restarts do not lose an ongoing call's workspace access. It stores no transcript, fresh speech authorization, cached workspace discovery or tool promises. Handles expire after two minutes without activity or one hour from creation; ended handles are removed, and expired records are pruned on load. Restoring a handle does not open a microphone, create a provider session or replay commands.
+
 No raw audio is recorded locally. Recent transcript handoff is kept in tab sessionStorage for up to 12 hours; End call clears it. Message text/replies are retained in the private outbox for up to 24 hours. Diagnostic files contain only allow-listed event metadata, timings and classifications, hashed message correlation IDs, script revisions and ephemeral per-page random IDs (no device identifier or raw user agent); usage files retain token counts/cost estimates without transcript text. Provider data policies still apply.
 
 Report vulnerabilities privately to the Trailblaze repository owners. Never include live credentials, launch links, cookies or unsanitized conversation dumps in an issue or commit. Rotate any exposed credentials.

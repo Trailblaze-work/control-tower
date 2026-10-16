@@ -22,6 +22,7 @@ let pendingTools = 0;
 let audioPlaying = false;
 let currentConfig, configRevision, pendingConfig, updatingConfig, updateTimeout;
 let checkingConfig = false;
+let heartbeatWarning;
 let history = [];
 let lastAssistant;
 let muted = false;
@@ -341,6 +342,23 @@ async function finish(message = 'Call ended.', expectedGeneration = generation, 
   status(message);
   $('refresh').hidden = true; renderMicrophones();
 }
+async function checkHeartbeat(version) {
+  if (!callId || version !== generation) return;
+  try {
+    await api('heartbeat', { callId });
+    if (version !== generation) return;
+    if (heartbeatWarning && $('error').textContent === heartbeatWarning) error('');
+    heartbeatWarning = undefined;
+    diagnostic('Workspace connection', 'Connected');
+  } catch (cause) {
+    if (version !== generation) return;
+    heartbeatWarning = cause.code === 'missing_call'
+      ? 'The voice service lost this call handle. Tap Refresh conversation to reconnect with saved context.'
+      : cause.status === 401 ? 'This browser pairing expired. Open a fresh link from Control Tower.'
+      : 'The laptop connection is temporarily unavailable. Workspace actions may be delayed.';
+    error(heartbeatWarning);
+  }
+}
 async function refreshConfiguration() {
   if (checkingConfig || !callId || phase !== 'connected') return;
   const version = generation;
@@ -505,7 +523,7 @@ async function start(resuming = history.length > 0 || Boolean(callId), automatic
       requestResponse(resuming ? undefined : { output_modalities: ['text'], tool_choice: { type: 'function', name: 'get_overview' } }); timer = setInterval(() => void pollJobs(version), 8000);
       heartbeat = setInterval(() => {
         reportCaptureState();
-        if (callId && version === generation) void api('heartbeat', { callId }).catch(() => error('The laptop connection is unavailable. Workspace actions may be delayed.'));
+        void checkHeartbeat(version);
       }, 20000);
       configTimer = setInterval(() => void refreshConfiguration(), 10000);
       $('refresh').hidden = false;

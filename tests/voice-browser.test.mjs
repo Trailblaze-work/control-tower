@@ -142,6 +142,19 @@ test('browser preserves audio capture and context across reception loss, updates
   jobState = 'completed'; await page.clock.runFor(8001);
   await page.waitForFunction(() => window.sentEvents.some(e => e.item?.content?.[0]?.text?.includes('The requested change is complete.')));
   assert.match(await page.locator('#transcript').textContent(), /Reply received/);
+  let heartbeatState = 'missing';
+  const heartbeatRoute = route => heartbeatState === 'missing' ? route.fulfill({ status: 404, json: { error: 'Call handle lost after restart.' } }) : heartbeatState === 'offline' ? route.abort() : route.continue();
+  await page.route('**/api/heartbeat', heartbeatRoute);
+  await page.clock.runFor(20001);
+  await page.waitForFunction(() => document.querySelector('#error').textContent.includes('lost this call handle'));
+  assert.ok(!(await page.locator('#error').textContent()).includes('laptop connection'));
+  heartbeatState = 'healthy'; await page.clock.runFor(20001);
+  await page.waitForFunction(() => document.querySelector('#error').hidden);
+  heartbeatState = 'offline'; await page.clock.runFor(20001);
+  await page.waitForFunction(() => document.querySelector('#error').textContent.includes('temporarily unavailable'));
+  heartbeatState = 'healthy'; await page.clock.runFor(20001);
+  await page.waitForFunction(() => document.querySelector('#error').hidden);
+  await page.unroute('**/api/heartbeat', heartbeatRoute);
   await page.route('**/api/tool', async route => {
     if (route.request().postDataJSON().invocationId !== 'lost-call') return route.continue();
     return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Call session lost. Refresh conversation to reconnect with saved context.', requestId: 'safe-diagnostic-reference' }) });
