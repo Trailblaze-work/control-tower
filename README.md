@@ -129,6 +129,16 @@ Or open **Diagnostics** in laptop settings. Private structured logs live at `~/.
 
 The intermittent failure that motivated these diagnostics was not reproduced during local investigation; workspace overview/history reads succeeded. A confirmed misleading-error path was corrected, and diagnostics now make future occurrences attributable instead of reporting every failure as an unreachable laptop.
 
+## Mobile reception and CarPlay
+
+Brief WebRTC disconnects now get an eight-second grace period so the existing connection can recover. A failed/closed voice connection then reconnects automatically with bounded backoff (2, 4, 8, then up to 15 seconds between attempts). Network-online and page-visible events can accelerate recovery. There are at most eight attempts and a two-minute recovery window; after that capture is released and **Resume conversation** is available. **End call** and closing the page cancel recovery immediately.
+
+During recovery the plugin retains the live microphone track, mute state, and current audio element rather than deliberately ending the iPhone audio session. This is intended to reduce avoidable CarPlay hangups. A replacement WebRTC connection gets bounded transcript/job context, including interrupted speech, without replaying workspace commands. Audio spoken while disconnected is not buffered for later delivery. A new provider session can incur additional context-processing costs.
+
+This repairs the app's confirmed hangup path: a logged disconnect on 2026-10-15 transitioned to failed about ten seconds later, and the old handler stopped all microphone tracks instead of recovering. Browser tests simulate transient disconnects, offline/online transitions, a failed reconnect attempt, mute preservation, recovery expiry and explicit End cancellation. Physical iPhone/CarPlay behavior still needs a real-device retest.
+
+Safari/iOS may suspend the page, end capture or require a playback/microphone gesture. The app detects ended capture and audio-session interruption where supported, but cannot guarantee native CarPlay call continuity or background scheduling. If permissions/playback require a gesture, use the displayed Resume control when safe. The fallback opens a new provider connection with saved text, rather than calling `restartIce()` without the required peer renegotiation. See [WebRTC disconnect states](https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/iceConnectionState), [ICE restart requirements](https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/restartIce), and [OpenAI WebRTC setup](https://developers.openai.com/api/docs/guides/voice-webrtc).
+
 ## Configuration and architecture
 
 | Setting | Default |

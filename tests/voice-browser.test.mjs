@@ -10,7 +10,7 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-test('browser applies prompt updates between turns and preserves history through refresh and reload', { timeout: 30000 }, async t => {
+test('browser preserves audio capture and context across reception loss, updates, refresh and reload', { timeout: 30000 }, async t => {
   const reservation = createServer();
   await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
   const port = reservation.address().port; await new Promise(resolve => reservation.close(resolve));
@@ -31,9 +31,9 @@ test('browser applies prompt updates between turns and preserves history through
   t.after(() => browser.close());
   const context = await browser.newContext({ bypassCSP: true });
   await context.addInitScript(() => {
-    window.sentEvents = []; window.channels = [];
-    const track = { enabled: true, label: 'Silent synthetic microphone', stop() {} };
-    navigator.mediaDevices.getUserMedia = async () => ({ getAudioTracks: () => [track], getTracks: () => [track] });
+    window.sentEvents = []; window.channels = []; window.peers = []; window.microphoneRequests = window.microphoneStops = 0;
+    const track = { enabled: true, readyState: 'live', label: 'Silent synthetic microphone', stop() { this.readyState = 'ended'; window.microphoneStops++; } };
+    navigator.mediaDevices.getUserMedia = async () => { window.microphoneRequests++; return { getAudioTracks: () => [track], getTracks: () => [track] }; };
     class Channel {
       readyState = 'connecting';
       emit(value) { this.onmessage?.({ data: JSON.stringify(value) }); }
@@ -53,6 +53,7 @@ test('browser applies prompt updates between turns and preserves history through
       close() { this.readyState = 'closed'; this.onclose?.(); }
     }
     window.RTCPeerConnection = class {
+      constructor() { window.peers.push(this); }
       connectionState = 'new'; localDescription = { sdp: 'v=0\r\ns=synthetic-offer' };
       createDataChannel() { this.channel = new Channel(); window.channels.push(this.channel); return this.channel; }
       addTrack() {} async createOffer() { return this.localDescription; } async setLocalDescription() {}
@@ -87,14 +88,53 @@ test('browser applies prompt updates between turns and preserves history through
   await page.waitForFunction(() => window.sentEvents.some(event => event.type === 'session.update'));
   assert.equal(await page.locator('[data-diagnostic="Update"]').textContent(), 'Latest instructions applied without reconnecting.');
   assert.equal(await page.evaluate(() => window.channels.length), 1);
+  await page.getByRole('button', { name: 'Mute microphone', exact: true }).click();
+  await page.evaluate(() => { const p = window.peers.at(-1); p.connectionState = 'disconnected'; p.onconnectionstatechange(); });
+  await page.clock.runFor(4000);
+  assert.equal(await page.evaluate(() => window.peers.length), 1, 'brief drops retain the existing peer');
+  await page.evaluate(() => { const p = window.peers.at(-1); p.connectionState = 'connected'; p.onconnectionstatechange(); });
+  await page.clock.runFor(6000);
+  assert.equal(await page.evaluate(() => window.peers.length), 1, 'a recovered peer cancels the replacement timer');
+  await context.setOffline(true);
+  await page.evaluate(() => { const p = window.peers.at(-1); p.connectionState = 'failed'; p.onconnectionstatechange(); });
+  await page.clock.runFor(15000);
+  assert.equal(await page.evaluate(() => window.microphoneStops), 0, 'weak reception does not tear down capture');
+  assert.equal(await page.getByRole('button', { name: 'End call', exact: true }).isVisible(), true);
+  await context.setOffline(false); await page.clock.runFor(1);
+  await page.waitForFunction(() => window.peers.length === 2 && window.sentEvents.some(event => event.item?.content?.[0]?.text?.startsWith('CONVERSATION HANDOFF:')));
+  assert.equal(await page.evaluate(() => window.microphoneRequests), 1, 'automatic recovery reuses microphone permission/capture');
+  assert.equal(await page.evaluate(() => window.microphoneStops), 0);
+  assert.equal(await page.getByRole('button', { name: 'Unmute microphone', exact: true }).isVisible(), true);
   await page.getByRole('button', { name: 'Refresh conversation', exact: true }).click();
-  await page.waitForFunction(() => window.channels.length === 2 && window.sentEvents.some(event => event.item?.content?.[0]?.text?.startsWith('CONVERSATION HANDOFF:')));
+  await page.waitForFunction(() => window.channels.length === 3 && window.sentEvents.some(event => event.item?.content?.[0]?.text?.startsWith('CONVERSATION HANDOFF:')));
   const handoff = await page.evaluate(() => window.sentEvents.find(event => event.item?.content?.[0]?.text?.startsWith('CONVERSATION HANDOFF:')).item.content[0].text);
   assert.match(handoff, /Remember the reversible rollout decision/); assert.match(handoff, /Do not replay earlier tool calls/);
+  let rejectConfig = true;
+  await page.route('**/api/config', route => rejectConfig ? route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Temporary connection failure' }) }) : route.continue());
+  await page.evaluate(() => { const p = window.peers.at(-1); p.connectionState = 'failed'; p.onconnectionstatechange(); });
+  await page.clock.runFor(2001);
+  await page.waitForFunction(() => document.querySelector('[data-diagnostic="Recovery"]')?.textContent === 'Connection attempt failed');
+  assert.equal(await page.evaluate(() => window.microphoneStops), 0, 'a failed recovery request still retains capture');
+  rejectConfig = false;
+  await page.clock.runFor(4001);
+  await page.waitForFunction(() => window.peers.length === 4 && window.peers.at(-1).connectionState === 'connected');
+  assert.equal(await page.evaluate(() => window.microphoneRequests), 1, 'retry uses backoff and the original microphone');
+  await context.setOffline(true);
+  await page.evaluate(() => { const p = window.peers.at(-1); p.connectionState = 'failed'; p.onconnectionstatechange(); });
+  await page.clock.runFor(120001);
+  assert.equal(await page.getByRole('button', { name: 'Resume conversation', exact: true }).isVisible(), true, 'a prolonged outage stops recovery and leaves a clear manual fallback');
+  assert.equal(await page.evaluate(() => window.microphoneStops), 1, 'capture is released after the bounded recovery window');
+  const peersAfterTimeout = await page.evaluate(() => window.peers.length);
+  await context.setOffline(false); await page.clock.runFor(1000);
+  assert.equal(await page.evaluate(() => window.peers.length), peersAfterTimeout, 'network return does not revive a call after recovery was stopped');
   await page.reload();
   await page.getByRole('button', { name: 'Resume conversation', exact: true }).click();
   await page.waitForFunction(() => window.sentEvents.some(event => event.item?.content?.[0]?.text?.startsWith('CONVERSATION HANDOFF:')));
+  await page.evaluate(() => { const p = window.peers.at(-1); p.connectionState = 'failed'; p.onconnectionstatechange(); });
   await page.getByRole('button', { name: 'End call', exact: true }).click();
+  const peersAtEnd = await page.evaluate(() => window.peers.length);
+  await page.clock.runFor(20000);
+  assert.equal(await page.evaluate(() => window.peers.length), peersAtEnd, 'End call cancels pending automatic recovery');
   assert.equal(await page.getByRole('button', { name: 'Start conversation', exact: true }).isVisible(), true);
   assert.equal(await page.evaluate(() => sessionStorage.getItem('paseo-voice-checkpoint-v1')), null);
 });

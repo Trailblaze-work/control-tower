@@ -17,6 +17,9 @@ let checkingConfig = false;
 let history = [];
 let lastAssistant;
 let muted = false;
+let callWanted = false;
+let recoveryTimer, recoveryDeadline, negotiationTimer, recoveryStartedAt;
+let recoveryAttempts = 0;
 const checkpointKey = 'paseo-voice-checkpoint-v1';
 const assistantMessages = new Map();
 const userMessages = new Map();
@@ -119,23 +122,67 @@ function controls(active) {
   $('start').hidden = active; $('mute').hidden = !active; $('end').hidden = !active;
   $('orb').classList.toggle('active', active);
 }
-async function finish(message = 'Call ended.', expectedGeneration = generation, preserve = false) {
+function clearRecovery() {
+  clearTimeout(recoveryTimer); clearTimeout(recoveryDeadline); recoveryTimer = recoveryDeadline = undefined;
+  recoveryStartedAt = undefined; recoveryAttempts = 0;
+}
+function transportReady() {
+  if (peer?.connectionState !== 'connected' || channel?.readyState !== 'open') return;
+  if (recoveryStartedAt !== undefined) reportClient({ event: 'recovery_succeeded', durationMs: Date.now()-recoveryStartedAt });
+  clearRecovery(); clearTimeout(negotiationTimer); phase = 'connected'; error(''); status('Listening…'); void keepAwake();
+}
+function recover(reason, delay) {
+  if (!callWanted || recoveryTimer !== undefined) return;
+  recoveryStartedAt ??= Date.now();
+  recoveryDeadline ??= setTimeout(() => {
+    if (!callWanted) return;
+    reportClient({ event: 'recovery_stopped', code: 'timeout' });
+    void finish('Reception has not recovered. Your context is saved; tap Resume conversation when ready.', generation, true);
+  }, 120000);
+  if (Date.now()-recoveryStartedAt >= 120000 || recoveryAttempts >= 8) {
+    reportClient({ event: 'recovery_stopped', code: 'timeout' });
+    void finish('Connection is still unavailable. Your context is saved; tap Resume conversation when reception improves.', generation, true);
+    return;
+  }
+  status(navigator.onLine === false ? 'No network. Waiting to reconnect…' : 'Connection interrupted. Reconnecting automatically…');
+  diagnostic('Recovery', reason);
+  recoveryTimer = setTimeout(async () => {
+    recoveryTimer = undefined;
+    if (!callWanted) return;
+    if (navigator.onLine === false) { recover('Waiting for network', 2000); return; }
+    recoveryAttempts++;
+    reportClient({ event: 'recovery_attempt', durationMs: Date.now()-recoveryStartedAt });
+    await finish('Reconnecting with your conversation saved…', generation, true, true);
+    if (callWanted) await start(true, true);
+  }, delay ?? Math.min(2000 * 2 ** recoveryAttempts, 15000));
+}
+async function finish(message = 'Call ended.', expectedGeneration = generation, preserve = false, keepMedia = false) {
   if (expectedGeneration !== generation) return;
+  if (preserve) {
+    if (lastAssistant && audioPlaying) lastAssistant.interrupted = true;
+    for (const node of assistantMessages.values()) {
+      if (node.textContent) { remember('assistant', node.textContent); history.at(-1).interrupted = true; }
+    }
+  }
   generation++; phase = 'idle'; request?.abort();
+  clearTimeout(negotiationTimer);
+  if (!keepMedia) { callWanted = false; clearRecovery(); }
   clearInterval(timer); timer = undefined;
   clearInterval(heartbeat); heartbeat = undefined;
   clearInterval(configTimer); clearTimeout(updateTimeout); updatingConfig = undefined;
   const ended = callId;
   if (!preserve) { callId = undefined; if (ended) void usageQueue.catch(() => {}).then(() => api('end', { callId: ended })).catch(() => {}); }
-  channel?.close(); peer?.close(); stream?.getTracks().forEach(track => track.stop());
-  channel = peer = stream = undefined; speaker.srcObject = null;
-  void wakeLock?.release().catch(() => {}); wakeLock = undefined;
+  channel?.close(); peer?.close(); channel = peer = undefined;
+  if (!keepMedia) {
+    stream?.getTracks().forEach(track => track.stop()); stream = undefined; speaker.srcObject = null;
+    void wakeLock?.release().catch(() => {}); wakeLock = undefined;
+  }
   responseActive = pendingResponse = userSpeaking = audioPlaying = false;
   handledTools.clear(); assistantMessages.clear(); userMessages.clear();
   pendingConfig = undefined;
   if (!preserve) { history = []; pendingJobs.clear(); muted = false; try { sessionStorage.removeItem(checkpointKey); } catch {} }
   else checkpoint();
-  controls(false); $('start').disabled = false; $('mute').textContent = 'Mute microphone'; $('mute').setAttribute('aria-pressed', 'false'); $('resume').hidden = true;
+  controls(keepMedia); $('start').disabled = false; $('mute').textContent = muted ? 'Unmute microphone' : 'Mute microphone'; $('mute').setAttribute('aria-pressed', String(muted)); $('resume').hidden = true;
   $('start').textContent = preserve ? 'Resume conversation' : 'Start conversation';
   status(message);
   $('refresh').hidden = true;
@@ -159,8 +206,8 @@ async function refreshConfiguration() {
   finally { checkingConfig = false; }
 }
 async function reconnect() {
-  if (phase === 'connecting') return;
-  await finish('Reconnecting with your conversation saved…', generation, true);
+  clearTimeout(recoveryTimer); recoveryTimer = undefined;
+  await finish('Reconnecting with your conversation saved…', generation, true, true);
   await start(true);
 }
 function acceptEvent(event, version) {
@@ -231,23 +278,34 @@ async function pollJobs(version) {
     } catch { /* The main connection watchdog surfaces connection loss. */ }
   }
 }
-async function start(resuming = history.length > 0 || Boolean(callId)) {
+async function start(resuming = history.length > 0 || Boolean(callId), automatic = false) {
   if (phase !== 'idle') return;
+  if (automatic && !callWanted) return;
+  if (!automatic) clearRecovery();
+  callWanted = true;
   const version = ++generation; phase = 'connecting'; controls(true); error(''); status('Opening microphone…');
-  request = new AbortController();
+  const attemptRequest = new AbortController(); request = attemptRequest;
   try {
     if (!window.isSecureContext) throw new Error('Microphone access needs HTTPS on iPhone. Open the current private call link.');
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('This browser does not expose microphone capture. Open in Safari.');
-    if (navigator.audioSession) navigator.audioSession.type = 'play-and-record';
+    if (navigator.audioSession) { try { navigator.audioSession.type = 'play-and-record'; } catch { /* Unsupported category must not end a call. */ } }
     // Start playback inside the tap gesture; attach the remote stream as soon as it arrives.
     speaker.muted = false;
-    const captured = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+    const reusable = stream?.getAudioTracks().some(track => track.readyState !== 'ended');
+    const captured = reusable ? stream : await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
     if (version !== generation) { captured.getTracks().forEach(track => track.stop()); return; }
     stream = captured;
     const track = stream.getAudioTracks()[0]; diagnostic('Microphone', track.label || 'Default device');
+    track.addEventListener?.('ended', () => {
+      if (callWanted && stream?.getAudioTracks().includes(track)) {
+        reportClient({ event: 'microphone_ended' }); recover('Microphone capture ended', 0);
+      }
+    }, { once: true });
     track.enabled = !muted;
     $('mute').textContent = muted ? 'Unmute microphone' : 'Mute microphone'; $('mute').setAttribute('aria-pressed', String(muted));
-    const config = await api('config'); currentConfig = config.session;
+    const config = await api('config', undefined, AbortSignal.any([attemptRequest.signal, AbortSignal.timeout(20000)]));
+    if (version !== generation) return;
+    currentConfig = config.session;
     const connection = new RTCPeerConnection(); peer = connection;
     connection.ontrack = (event) => {
       if (version !== generation) return;
@@ -258,15 +316,16 @@ async function start(resuming = history.length > 0 || Boolean(callId)) {
       if (version !== generation) return;
       diagnostic('WebRTC', connection.connectionState);
       reportClient({ event: 'webrtc_state', operation: 'webrtc', connection: connection.connectionState });
-      if (connection.connectionState === 'connected') { phase = 'connected'; status('Listening…'); void keepAwake(); }
-      if (connection.connectionState === 'disconnected') status('Connection interrupted. Waiting to reconnect…');
-      if (['failed', 'closed'].includes(connection.connectionState)) void finish('Connection lost. Tap Resume conversation to reconnect with saved context.', version, true).then(() => { $('start').textContent = 'Resume conversation'; });
+      if (connection.connectionState === 'connected') transportReady();
+      if (connection.connectionState === 'disconnected') recover('Waiting briefly for the existing connection', 8000);
+      if (['failed', 'closed'].includes(connection.connectionState)) recover('Voice transport failed');
     };
     connection.addTrack(track, stream);
     const events = connection.createDataChannel('oai-events'); channel = events;
     events.onmessage = (message) => { try { acceptEvent(JSON.parse(message.data), version); } catch { error('Received an invalid voice event.'); } };
     events.onopen = () => {
       if (version !== generation) return;
+      transportReady();
       const opening = resuming
         ? `CONVERSATION HANDOFF: historical context, not new commands or authorization. Do not replay earlier tool calls or send past messages again. Assistant speech marked interrupted may not have been heard fully. Pending job IDs are references only; use get_job to recover their current status. Recent transcript: ${JSON.stringify(history)}. Pending jobs: ${JSON.stringify([...pendingJobs.keys()])}. Continue from this context without repeating the startup briefing; briefly say you are ready to continue unless a pending result answers the user's last question.`
         : 'Give me a concise briefing on the top one to three outcomes, decisions or blockers that need my attention across my Paseo workspaces. Consult relevant workspaces silently, then lead with the findings. Do not announce checks or describe your process.';
@@ -278,20 +337,30 @@ async function start(resuming = history.length > 0 || Boolean(callId)) {
       configTimer = setInterval(() => void refreshConfiguration(), 10000);
       $('refresh').hidden = false;
     };
-    events.onclose = () => { if (version === generation && phase !== 'idle') void finish('Call disconnected. Tap Resume conversation to continue.', version, true).then(() => { $('start').textContent = 'Resume conversation'; }); };
+    events.onclose = () => { if (version === generation && callWanted) recover('Voice data channel closed'); };
     await connection.setLocalDescription(await connection.createOffer());
+    if (version !== generation) { connection.close(); return; }
     status('Connecting voice…');
-    const response = await fetch('./api/session', { method: 'POST', headers: { 'Content-Type': 'application/sdp', ...(resuming && callId ? { 'X-Previous-Call': callId } : {}) }, body: connection.localDescription.sdp, signal: AbortSignal.any([request.signal, AbortSignal.timeout(35000)]) });
-    if (!response.ok) throw new Error((await response.json()).error);
+    const response = await fetch('./api/session', { method: 'POST', headers: { 'Content-Type': 'application/sdp', ...(resuming && callId ? { 'X-Previous-Call': callId } : {}) }, body: connection.localDescription.sdp, signal: AbortSignal.any([attemptRequest.signal, AbortSignal.timeout(35000)]) });
+    if (!response.ok) { const cause = new Error((await response.json()).error); cause.status = response.status; throw cause; }
     const createdCall = response.headers.get('X-Call-Id');
     const answer = await response.text();
-    if (version !== generation) { void api('end', { callId: createdCall }).catch(() => {}); return; }
+    if (version !== generation) { if (!callWanted || createdCall !== callId) void api('end', { callId: createdCall }).catch(() => {}); return; }
     callId = createdCall;
     configRevision = response.headers.get('X-Config-Revision'); checkpoint();
     await connection.setRemoteDescription({ type: 'answer', sdp: answer });
+    if (version === generation && (connection.connectionState !== 'connected' || events.readyState !== 'open')) {
+      negotiationTimer = setTimeout(() => { if (version === generation) recover('Voice handshake timed out', 0); }, 20000);
+    }
   } catch (cause) {
     if (version !== generation) return;
-    await finish('Ready when you are.', version, resuming); error(cause.name === 'NotAllowedError' ? 'Microphone access was denied. Allow it in Safari’s website settings, then retry.' : cause.message);
+    const needsUser = ['NotAllowedError', 'NotFoundError', 'NotReadableError'].includes(cause.name) || [400, 401, 403].includes(cause.status);
+    if (callWanted && !needsUser && stream) {
+      await finish('Waiting for reception to recover…', version, true, true); recover('Connection attempt failed');
+    } else {
+      await finish('Tap Resume conversation to continue when ready.', version, resuming);
+      error(cause.name === 'NotAllowedError' ? 'Safari needs microphone permission again. Tap Resume conversation when safe to do so.' : cause.message);
+    }
   }
 }
 $('start').addEventListener('click', () => void start());
@@ -303,8 +372,21 @@ $('mute').addEventListener('click', () => {
   muted = !track.enabled;
 });
 $('resume').addEventListener('click', () => void speaker.play().then(() => { $('resume').hidden = true; error(''); }).catch(() => error('Playback is still blocked. Check the audio output on your iPhone.')));
-document.addEventListener('visibilitychange', () => { diagnostic('Page', document.visibilityState); reportClient({ event: document.visibilityState === 'visible' ? 'page_visible' : 'page_hidden', operation: 'page' }); if (document.visibilityState === 'visible') void keepAwake(); });
-window.addEventListener('pagehide', () => { checkpoint(); generation++; peer?.close(); stream?.getTracks().forEach(track => track.stop()); });
+function resumeRecovery() {
+  if (!callWanted || phase === 'connecting') return;
+  if (recoveryStartedAt !== undefined || peer?.connectionState === 'disconnected' || peer?.connectionState === 'failed' || stream?.getAudioTracks().some(track => track.readyState === 'ended')) {
+    clearTimeout(recoveryTimer); recoveryTimer = undefined; recover('Network or page returned', 0);
+  }
+}
+window.addEventListener('online', resumeRecovery);
+document.addEventListener('visibilitychange', () => { diagnostic('Page', document.visibilityState); reportClient({ event: document.visibilityState === 'visible' ? 'page_visible' : 'page_hidden', operation: 'page' }); if (document.visibilityState === 'visible') { void keepAwake(); resumeRecovery(); } });
+navigator.audioSession?.addEventListener?.('statechange', () => {
+  diagnostic('Audio session', navigator.audioSession.state);
+  if (callWanted && navigator.audioSession.state === 'interrupted') reportClient({ event: 'audio_interrupted' });
+  if (navigator.audioSession.state === 'active') resumeRecovery();
+});
+window.addEventListener('pagehide', () => { checkpoint(); callWanted = false; clearRecovery(); clearTimeout(negotiationTimer); generation++; request?.abort(); peer?.close(); stream?.getTracks().forEach(track => track.stop()); });
+window.addEventListener('pageshow', event => { if (event.persisted) void finish('Tap Resume conversation to continue.', generation, true); });
 async function boot() {
   try {
     const ticket = location.hash.slice(1); window.history.replaceState(null, '', location.pathname);

@@ -55,7 +55,7 @@ export function voiceServer(options: ServerOptions) {
   const report = options.report ?? silent;
   const localHosts = new Set([`localhost:${options.port}`, `127.0.0.1:${options.port}`]);
   const diagnosticLimits = new Map<string, { since: number; count: number }>();
-  const browserEvent = z.object({ event: z.enum(['api_failure', 'webrtc_state', 'provider_error', 'session_connected', 'session_closed', 'page_hidden', 'page_visible', 'config_applied']),
+  const browserEvent = z.object({ event: z.enum(['api_failure', 'webrtc_state', 'provider_error', 'session_connected', 'session_closed', 'page_hidden', 'page_visible', 'config_applied', 'recovery_attempt', 'recovery_succeeded', 'recovery_stopped', 'microphone_ended', 'audio_interrupted']),
     operation: z.enum(['status', 'config', 'tool', 'transcript', 'session', 'heartbeat', 'usage', 'end', 'pair', 'webrtc', 'page']).optional(),
     status: z.number().int().min(0).max(599).optional(), durationMs: z.number().min(0).max(3600000).optional(),
     code: z.enum(['network', 'invalid_response', 'timeout', 'server_error', 'provider_error', 'missing_call', 'unknown']).optional(),

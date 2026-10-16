@@ -11,3 +11,5 @@ Keys and runtime state are stored outside the checkout in `~/.paseo/voice/`, wit
 No raw audio is recorded locally. Recent transcript handoff is kept in tab sessionStorage for up to 12 hours; End call clears it. Message text/replies are retained in the private outbox for up to 24 hours. Diagnostic files contain only allow-listed event metadata, timings and classifications; usage files retain token counts/cost estimates without transcript text. Provider data policies still apply.
 
 Report vulnerabilities privately to the Trailblaze repository owners. Never include live credentials, launch links, cookies or unsanitized conversation dumps in an issue or commit. Rotate any exposed credentials.
+
+During automatic network recovery, microphone capture can stay active for up to two minutes to preserve the audio route; speech during an outage is not recorded or replayed. End call or closing the page cancels recovery and stops capture. Recovery expiry also stops capture. Reconnection hands over bounded text context and does not replay workspace mutations.
