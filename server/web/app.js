@@ -1,4 +1,6 @@
 import { pendingStatuses, requiresReconnect, restoreCheckpoint } from './session-state.js';
+const clientRevision = '__VOICE_CLIENT_REVISION__';
+const clientId = crypto.randomUUID();
 const $ = (id) => document.getElementById(id);
 let peer, channel, stream, callId, wakeLock, timer, heartbeat, request, configTimer;
 let generation = 0;
@@ -89,14 +91,14 @@ async function api(path, data, signal) {
   }
 }
 function reportClient(event) {
-  diagnosticBuffer.push(event); if (diagnosticBuffer.length > 30) diagnosticBuffer.shift(); void flushDiagnostics();
+  diagnosticBuffer.push({ ...event, clientRevision, clientId, occurredAt: Date.now() }); if (diagnosticBuffer.length > 30) diagnosticBuffer.shift(); void flushDiagnostics();
 }
 async function flushDiagnostics() {
   if (flushingDiagnostics || !diagnosticBuffer.length) return;
   flushingDiagnostics = true;
   try {
     while (diagnosticBuffer.length) {
-      const r = await fetch('./api/diagnostic', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(diagnosticBuffer[0]), signal: AbortSignal.timeout(4000) });
+      const r = await fetch('./api/diagnostic', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(diagnosticBuffer[0]), keepalive: true, signal: AbortSignal.timeout(4000) });
       if (!r.ok) break; diagnosticBuffer.shift();
     }
   } catch { /* Retry buffered, content-free diagnostics after the next successful API request. */ }
@@ -124,7 +126,7 @@ function controls(active) {
 }
 function systemCallControls(active) {
   const session = navigator.mediaSession;
-  if (!session?.setActionHandler) { if (active) diagnostic('Car controls', 'System controls unavailable; use End call.'); return; }
+  if (!session?.setActionHandler) { if (active) { diagnostic('Car controls', 'System controls unavailable; use End call.'); reportClient({ event: 'system_control', action: 'media_session', outcome: 'unsupported' }); } return; }
   const supported = [];
   for (const action of ['hangup', 'stop']) {
     try {
@@ -133,11 +135,11 @@ function systemCallControls(active) {
         reportClient({ event: action === 'hangup' ? 'system_hangup' : 'system_stop' });
         void finish();
       } : null);
-      if (active) supported.push(action);
-    } catch { /* Unsupported actions must not prevent a call or its recovery. */ }
+      if (active) { supported.push(action); reportClient({ event: 'system_control', action, outcome: 'registered' }); }
+    } catch { if (active) reportClient({ event: 'system_control', action, outcome: 'unsupported' }); }
   }
   try { session.playbackState = active ? 'playing' : 'none'; } catch {}
-  try { session.setMicrophoneActive?.(active && !muted); } catch {}
+  try { session.setMicrophoneActive?.(active && !muted); if (active) reportClient({ event: 'system_control', action: 'microphone_state', outcome: session.setMicrophoneActive ? 'registered' : 'unsupported' }); } catch { if (active) reportClient({ event: 'system_control', action: 'microphone_state', outcome: 'unsupported' }); }
   try { session.metadata = active && typeof MediaMetadata !== 'undefined' ? new MediaMetadata({ title: 'Paseo Voice', artist: 'Workspace coordinator' }) : null; } catch {}
   diagnostic('Car controls', active ? (supported.length ? `Registered ${supported.join(' / ')}; device forwarding needs verification.` : 'System hangup unsupported; use End call.') : 'Inactive');
 }
@@ -193,7 +195,8 @@ async function finish(message = 'Call ended.', expectedGeneration = generation, 
   if (!preserve) { callId = undefined; if (ended) void usageQueue.catch(() => {}).then(() => api('end', { callId: ended })).catch(() => {}); }
   channel?.close(); peer?.close(); channel = peer = undefined;
   if (!keepMedia) {
-    stream?.getTracks().forEach(track => track.stop()); stream = undefined; speaker.srcObject = null;
+    const tracks = stream?.getTracks() ?? []; tracks.forEach(track => track.stop()); stream = undefined; speaker.srcObject = null;
+    reportClient({ event: 'end_cleaned', count: tracks.filter(track => track.readyState === 'ended').length });
     systemCallControls(false);
     try { if (navigator.audioSession) navigator.audioSession.type = 'auto'; } catch {}
     void wakeLock?.release().catch(() => {}); wakeLock = undefined;
@@ -386,7 +389,7 @@ async function start(resuming = history.length > 0 || Boolean(callId), automatic
   }
 }
 $('start').addEventListener('click', () => void start());
-$('end').addEventListener('click', () => void finish());
+$('end').addEventListener('click', () => { reportClient({ event: 'end_requested', action: 'button' }); void finish(); });
 $('refresh').addEventListener('click', () => void reconnect());
 $('mute').addEventListener('click', () => {
   const track = stream?.getAudioTracks()[0]; if (!track) return;
@@ -405,16 +408,20 @@ window.addEventListener('online', resumeRecovery);
 document.addEventListener('visibilitychange', () => { diagnostic('Page', document.visibilityState); reportClient({ event: document.visibilityState === 'visible' ? 'page_visible' : 'page_hidden', operation: 'page' }); if (document.visibilityState === 'visible') { void keepAwake(); resumeRecovery(); } });
 navigator.audioSession?.addEventListener?.('statechange', () => {
   diagnostic('Audio session', navigator.audioSession.state);
+  reportClient({ event: 'audio_state', outcome: ['active', 'inactive', 'interrupted'].includes(navigator.audioSession.state) ? navigator.audioSession.state : 'unknown' });
   if (callWanted && navigator.audioSession.state === 'interrupted') reportClient({ event: 'audio_interrupted' });
   if (navigator.audioSession.state === 'active') resumeRecovery();
 });
-window.addEventListener('pagehide', () => { checkpoint(); callWanted = false; clearRecovery(); clearTimeout(negotiationTimer); generation++; request?.abort(); peer?.close(); stream?.getTracks().forEach(track => track.stop()); systemCallControls(false); });
+for (const event of ['pause', 'ended']) speaker.addEventListener(event, () => { if (callWanted) reportClient({ event: event === 'pause' ? 'playback_pause' : 'playback_ended' }); });
+window.addEventListener('pagehide', () => { reportClient({ event: 'page_exit' }); checkpoint(); callWanted = false; clearRecovery(); clearTimeout(negotiationTimer); generation++; request?.abort(); peer?.close(); stream?.getTracks().forEach(track => track.stop()); systemCallControls(false); });
 window.addEventListener('pageshow', event => { if (event.persisted) void finish('Tap Resume conversation to continue.', generation, true); });
 async function boot() {
   try {
     const ticket = location.hash.slice(1); window.history.replaceState(null, '', location.pathname);
     if (ticket) await api('pair', { ticket });
     const info = await api('status');
+    diagnostic('Page revision', clientRevision); reportClient({ event: 'client_loaded', operation: 'page' });
+    reportClient({ event: 'system_control', action: 'audio_session', outcome: navigator.audioSession ? 'registered' : 'unsupported' });
     $('connection').textContent = info.ready ? 'Laptop connected' : 'Paseo disconnected';
     diagnostic('Secure page', window.isSecureContext); diagnostic('Voice model', info.model); diagnostic('Hosting', 'Your laptop'); diagnostic('Page', document.visibilityState);
     if (!info.ready) throw new Error('Start Paseo on the laptop, then reload this page.');

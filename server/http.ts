@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Access, equalSecret } from './auth.ts';
 import { conversation, Coordinator, recordUtterance } from './coordinator.ts';
 import type { Conversation } from './coordinator.ts';
@@ -55,7 +55,11 @@ export function voiceServer(options: ServerOptions) {
   const report = options.report ?? silent;
   const localHosts = new Set([`localhost:${options.port}`, `127.0.0.1:${options.port}`]);
   const diagnosticLimits = new Map<string, { since: number; count: number }>();
-  const browserEvent = z.object({ event: z.enum(['api_failure', 'webrtc_state', 'provider_error', 'session_connected', 'session_closed', 'page_hidden', 'page_visible', 'config_applied', 'recovery_attempt', 'recovery_succeeded', 'recovery_stopped', 'microphone_ended', 'audio_interrupted', 'system_hangup', 'system_stop']),
+  const browserEvent = z.object({ event: z.enum(['api_failure', 'webrtc_state', 'provider_error', 'session_connected', 'session_closed', 'page_hidden', 'page_visible', 'config_applied', 'recovery_attempt', 'recovery_succeeded', 'recovery_stopped', 'microphone_ended', 'audio_interrupted', 'system_hangup', 'system_stop', 'client_loaded', 'system_control', 'audio_state', 'playback_pause', 'playback_ended', 'end_requested', 'end_cleaned', 'page_exit']),
+    clientRevision: z.string().regex(/^[a-f0-9]{12}$/).optional(), clientId: z.string().uuid().optional(), occurredAt: z.number().int().min(0).optional(),
+    action: z.enum(['hangup', 'stop', 'media_session', 'audio_session', 'microphone_state', 'page', 'button']).optional(),
+    outcome: z.enum(['registered', 'unsupported', 'active', 'inactive', 'interrupted', 'unknown']).optional(),
+    count: z.number().int().min(0).max(100).optional(),
     operation: z.enum(['status', 'config', 'tool', 'transcript', 'session', 'heartbeat', 'usage', 'end', 'pair', 'webrtc', 'page']).optional(),
     status: z.number().int().min(0).max(599).optional(), durationMs: z.number().min(0).max(3600000).optional(),
     code: z.enum(['network', 'invalid_response', 'timeout', 'server_error', 'provider_error', 'missing_call', 'unknown']).optional(),
@@ -86,7 +90,7 @@ export function voiceServer(options: ServerOptions) {
         const name = path === '/' ? 'index.html' : path === '/settings' ? 'settings.html' : path.slice(1);
         const content = await readFile(new URL(`./web/${name}`, import.meta.url));
         res.writeHead(200, { 'Content-Type': name.endsWith('.html') ? 'text/html; charset=utf-8' : name.endsWith('.js') ? 'text/javascript' : 'text/css' });
-        res.end(content); return;
+        res.end(name === 'app.js' ? content.toString().replace('__VOICE_CLIENT_REVISION__', createHash('sha256').update(content).digest('hex').slice(0, 12)) : content); return;
       }
       if (req.method === 'POST' && path === '/api/launch') {
         if (!equalSecret(req.headers.authorization ?? '', `Bearer ${options.controlToken}`)) throw new HttpError(401, 'Local control authentication required');
@@ -134,7 +138,7 @@ export function voiceServer(options: ServerOptions) {
         if (diagnosticLimits.size > 1000) diagnosticLimits.clear();
         const limit = diagnosticLimits.get(owner) ?? { since: Date.now(), count: 0 };
         if (Date.now()-limit.since > 60000) { limit.since = Date.now(); limit.count = 0; }
-        if (++limit.count > 60) throw new HttpError(429, 'Diagnostic rate limit'); diagnosticLimits.set(owner, limit);
+        if (++limit.count > 120) throw new HttpError(429, 'Diagnostic rate limit'); diagnosticLimits.set(owner, limit);
         const parsed = browserEvent.safeParse(parseJson(await body(req, 2000)));
         if (!parsed.success) throw new HttpError(400, 'Invalid diagnostic event');
         report({ ...parsed.data, event: `browser_${parsed.data.event}`, requestId }); json(res, 200, { recorded: true }); return;

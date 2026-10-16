@@ -15,7 +15,7 @@ const report = telemetry.report;
 const paseo = localPaseo();
 try { await paseo.connect(); } catch { console.error('Paseo is unavailable; the voice page will show disconnected until the daemon reconnects.'); }
 const state = await initializeState();
-const outbox = new Outbox(paseo, join(stateDir, 'outbox.json')); await outbox.load();
+const outbox = new Outbox(paseo, join(stateDir, 'outbox.json'), report); await outbox.load();
 const access = new Access(join(stateDir, 'browser-sessions.json')); await access.load();
 const settings = new Settings(join(stateDir, 'settings.json'), loadApiKey);
 const usage = new UsageLedger(join(stateDir, 'usage.json')); await usage.load();

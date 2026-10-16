@@ -1,4 +1,4 @@
-export const pendingStatuses = new Set(['queued', 'submitting', 'accepted']);
+export const pendingStatuses = new Set(['queued', 'submitting', 'accepted', 'waiting']);
 export function restoreCheckpoint(raw) {
   try {
     const value = JSON.parse(raw);

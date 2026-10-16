@@ -7,7 +7,7 @@ test('conversation handoff bounds text history and preserves interrupted speech 
   assert.equal(checkpoint.history[1].interrupted, true); assert.equal(checkpoint.jobs[0][0], 'job');
   assert.equal(restoreCheckpoint('{}'), null);
   assert.equal(restoreCheckpoint(JSON.stringify({ savedAt: Date.now() - 13 * 60 * 60_000 })), null);
-  assert.equal(pendingStatuses.has('queued'), true); assert.equal(pendingStatuses.has('unknown'), false);
+  assert.equal(pendingStatuses.has('queued'), true); assert.equal(pendingStatuses.has('waiting'), true); assert.equal(pendingStatuses.has('unknown'), false);
 });
 test('instruction-only updates can stay on the call, while model or voice changes require reconnection', () => {
   const current = { model: 'realtime', instructions: 'Old', audio: { output: { voice: 'marin' } } };

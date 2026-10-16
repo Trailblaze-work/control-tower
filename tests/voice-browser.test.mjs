@@ -16,9 +16,12 @@ test('browser preserves audio capture and context across reception loss, updates
   const port = reservation.address().port; await new Promise(resolve => reservation.close(resolve));
   const origin = `http://localhost:${port}`;
   const config = await runtimeConfig();
+  const diagnostics = [];
+  let jobState = 'waiting';
   const server = voiceServer({
+    report: entry => diagnostics.push(entry),
     port, publicUrl: origin, controlToken: 'test-control', apiKey: 'test-key', ready: () => true,
-    coordinator: { invoke: async (_call, _id, name, args) => name === 'request_workspace_rename' && args.title === 'Applied title' ? { status: 'completed', kind: 'workspace_rename', executed: true, workspaceId: 'w', title: 'Applied title' } : name === 'request_workspace_rename' ? {
+    coordinator: { invoke: async (_call, _id, name, args) => name === 'send_message' ? { jobId: 'slow-job', status: 'accepted' } : name === 'get_job' ? { status: jobState, reply: jobState === 'completed' ? 'The requested change is complete.' : undefined } : name === 'request_workspace_rename' && args.title === 'Applied title' ? { status: 'completed', kind: 'workspace_rename', executed: true, workspaceId: 'w', title: 'Applied title' } : name === 'request_workspace_rename' ? {
       status: 'requires_user_action', executed: false, kind: 'workspace_rename', workspaceId: 'w', requestedTitle: '<img src=x onerror=alert(1)>',
       sdkPlan: { method: 'workspaces.ref(workspaceId).setTitle', workspaceId: 'w', title: '<img src=x onerror=alert(1)>' },
       manualSteps: ['Review the workspace title in Paseo.'], risks: ['Display title only.'],
@@ -72,6 +75,12 @@ test('browser preserves audio capture and context across reception loss, updates
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('[data-diagnostic="WebRTC"]')?.textContent === 'connected');
   assert.equal(await page.evaluate(() => typeof window.systemActions.hangup), 'function');
+  await page.waitForFunction(() => /^[a-f0-9]{12}$/.test(document.querySelector('[data-diagnostic="Page revision"]')?.textContent));
+  await page.waitForTimeout(50);
+  assert.ok(diagnostics.some(entry => entry.event === 'browser_client_loaded' && /^[a-f0-9]{12}$/.test(entry.clientRevision)));
+  assert.ok(diagnostics.some(entry => entry.event === 'browser_system_control' && entry.action === 'hangup' && entry.outcome === 'registered'));
+  await page.evaluate(() => document.querySelector('#speaker').dispatchEvent(new Event('pause')));
+  assert.equal(await page.getByRole('button', { name: 'End call', exact: true }).isVisible(), true, 'generic audio pause does not end calls');
   await page.evaluate(() => window.channels.at(-1).emit({ type: 'response.function_call_arguments.done', call_id: 'rename-draft', name: 'request_workspace_rename', arguments: JSON.stringify({ workspaceId: 'w', title: 'Review', reason: 'Clarity' }) }));
   await page.waitForFunction(() => document.querySelector('#workspace-request-list li'));
   assert.match(await page.locator('#workspace-request-list').textContent(), /<img src=x onerror=alert\(1\)> — not applied/);
@@ -79,6 +88,13 @@ test('browser preserves audio capture and context across reception loss, updates
   await page.evaluate(() => window.channels.at(-1).emit({ type: 'response.function_call_arguments.done', call_id: 'rename-applied', name: 'request_workspace_rename', arguments: JSON.stringify({ workspaceId: 'w', title: 'Applied title', reason: 'User request' }) }));
   await page.waitForFunction(() => document.querySelector('#workspace-request-list').textContent.includes('Renamed to: Applied title'));
   assert.equal(await page.locator('#workspace-request-list li').count(), 1, 'success replaces the obsolete pending rename card');
+  await page.evaluate(() => window.channels.at(-1).emit({ type: 'response.function_call_arguments.done', call_id: 'slow-request', name: 'send_message', arguments: '{}' }));
+  await page.waitForFunction(() => window.sentEvents.some(e => e.item?.call_id === 'slow-request'));
+  await page.clock.runFor(8001);
+  await page.waitForTimeout(50);
+  assert.equal(await page.evaluate(() => window.sentEvents.some(e => e.item?.content?.[0]?.text?.includes('BACKGROUND TOOL EVIDENCE'))), false, 'pending observation never produces a false failure announcement');
+  jobState = 'completed'; await page.clock.runFor(8001);
+  await page.waitForFunction(() => window.sentEvents.some(e => e.item?.content?.[0]?.text?.includes('The requested change is complete.')));
   await page.route('**/api/tool', async route => {
     if (route.request().postDataJSON().invocationId !== 'lost-call') return route.continue();
     return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Call session lost. Refresh conversation to reconnect with saved context.', requestId: 'safe-diagnostic-reference' }) });
@@ -153,6 +169,11 @@ test('browser preserves audio capture and context across reception loss, updates
   assert.match(await page.locator('[data-diagnostic="Car controls"]').textContent(), /Registered stop/);
   await page.evaluate(() => window.systemActions.stop());
   assert.equal(await page.getByRole('button', { name: 'Start conversation', exact: true }).isVisible(), true, 'stop remains available when hangup is unsupported');
+  await page.waitForTimeout(100);
+  assert.ok(diagnostics.some(entry => entry.event === 'browser_system_hangup'));
+  assert.ok(diagnostics.some(entry => entry.event === 'browser_system_stop'));
+  assert.ok(diagnostics.some(entry => entry.event === 'browser_system_control' && entry.action === 'hangup' && entry.outcome === 'unsupported'));
+  assert.ok(diagnostics.some(entry => entry.event === 'browser_end_cleaned' && entry.count === 1));
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await page.waitForFunction(() => window.peers.length === 3 && window.peers.at(-1).connectionState === 'connected');
   await page.getByRole('button', { name: 'End call', exact: true }).click();
