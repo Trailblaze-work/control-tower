@@ -613,7 +613,7 @@ async function boot() {
         if (history.length || callId) $('start').textContent = 'Resume conversation';
       }
     } catch { /* No checkpoint is available. Start a fresh conversation. */ }
-    status('Ready when you are.'); $('start').disabled = false;
+    status(''); $('start').disabled = false;
   } catch (cause) { status('Connection needs attention.'); error(cause.message); $('connection').textContent = 'Not connected'; }
 }
 void boot();
