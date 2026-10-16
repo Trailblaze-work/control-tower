@@ -32,8 +32,13 @@ test('browser preserves audio capture and context across reception loss, updates
   const context = await browser.newContext({ bypassCSP: true });
   await context.addInitScript(() => {
     window.sentEvents = []; window.channels = []; window.peers = []; window.microphoneRequests = window.microphoneStops = 0;
-    const track = { enabled: true, readyState: 'live', label: 'Silent synthetic microphone', stop() { this.readyState = 'ended'; window.microphoneStops++; } };
-    navigator.mediaDevices.getUserMedia = async () => { window.microphoneRequests++; return { getAudioTracks: () => [track], getTracks: () => [track] }; };
+    window.systemActions = {}; window.rejectHangup = false;
+    Object.defineProperty(navigator, 'mediaSession', { value: {
+      setActionHandler(action, callback) { if (action === 'hangup' && window.rejectHangup) throw new DOMException('Unsupported', 'NotSupportedError'); window.systemActions[action] = callback; },
+      setMicrophoneActive(active) { this.microphoneActive = active; }, playbackState: 'none', metadata: null,
+    } });
+    let track = { enabled: true, readyState: 'live', label: 'Silent synthetic microphone', stop() { this.readyState = 'ended'; window.microphoneStops++; } };
+    navigator.mediaDevices.getUserMedia = async () => { window.microphoneRequests++; if (track.readyState === 'ended') track = { ...track, enabled: true, readyState: 'live' }; return { getAudioTracks: () => [track], getTracks: () => [track] }; };
     class Channel {
       readyState = 'connecting';
       emit(value) { this.onmessage?.({ data: JSON.stringify(value) }); }
@@ -66,6 +71,7 @@ test('browser preserves audio capture and context across reception loss, updates
   await page.goto(link.url);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('[data-diagnostic="WebRTC"]')?.textContent === 'connected');
+  assert.equal(await page.evaluate(() => typeof window.systemActions.hangup), 'function');
   await page.evaluate(() => window.channels.at(-1).emit({ type: 'response.function_call_arguments.done', call_id: 'rename-draft', name: 'request_workspace_rename', arguments: JSON.stringify({ workspaceId: 'w', title: 'Review', reason: 'Clarity' }) }));
   await page.waitForFunction(() => document.querySelector('#workspace-request-list li'));
   assert.match(await page.locator('#workspace-request-list').textContent(), /<img src=x onerror=alert\(1\)> — not applied/);
@@ -89,6 +95,7 @@ test('browser preserves audio capture and context across reception loss, updates
   assert.equal(await page.locator('[data-diagnostic="Update"]').textContent(), 'Latest instructions applied without reconnecting.');
   assert.equal(await page.evaluate(() => window.channels.length), 1);
   await page.getByRole('button', { name: 'Mute microphone', exact: true }).click();
+  assert.equal(await page.evaluate(() => navigator.mediaSession.microphoneActive), false);
   await page.evaluate(() => { const p = window.peers.at(-1); p.connectionState = 'disconnected'; p.onconnectionstatechange(); });
   await page.clock.runFor(4000);
   assert.equal(await page.evaluate(() => window.peers.length), 1, 'brief drops retain the existing peer');
@@ -131,12 +138,25 @@ test('browser preserves audio capture and context across reception loss, updates
   await page.getByRole('button', { name: 'Resume conversation', exact: true }).click();
   await page.waitForFunction(() => window.sentEvents.some(event => event.item?.content?.[0]?.text?.startsWith('CONVERSATION HANDOFF:')));
   await page.evaluate(() => { const p = window.peers.at(-1); p.connectionState = 'failed'; p.onconnectionstatechange(); });
-  await page.getByRole('button', { name: 'End call', exact: true }).click();
+  await page.evaluate(() => window.systemActions.hangup());
   const peersAtEnd = await page.evaluate(() => window.peers.length);
   await page.clock.runFor(20000);
-  assert.equal(await page.evaluate(() => window.peers.length), peersAtEnd, 'End call cancels pending automatic recovery');
+  assert.equal(await page.evaluate(() => window.peers.length), peersAtEnd, 'system hangup cancels pending automatic recovery');
+  assert.equal(await page.evaluate(() => navigator.mediaSession.playbackState), 'none');
+  assert.equal(await page.evaluate(() => navigator.mediaSession.microphoneActive), false);
+  assert.equal(await page.evaluate(() => window.systemActions.hangup), null);
   assert.equal(await page.getByRole('button', { name: 'Start conversation', exact: true }).isVisible(), true);
   assert.equal(await page.evaluate(() => sessionStorage.getItem('paseo-voice-checkpoint-v1')), null);
+  await page.evaluate(() => { window.rejectHangup = true; });
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await page.waitForFunction(() => window.peers.length === 2 && window.peers.at(-1).connectionState === 'connected');
+  assert.match(await page.locator('[data-diagnostic="Car controls"]').textContent(), /Registered stop/);
+  await page.evaluate(() => window.systemActions.stop());
+  assert.equal(await page.getByRole('button', { name: 'Start conversation', exact: true }).isVisible(), true, 'stop remains available when hangup is unsupported');
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await page.waitForFunction(() => window.peers.length === 3 && window.peers.at(-1).connectionState === 'connected');
+  await page.getByRole('button', { name: 'End call', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: 'Start conversation', exact: true }).isVisible(), true);
 });
 
 test('laptop settings save write-only keys, display measured usage, and reject shared-call access', { timeout: 30000 }, async t => {

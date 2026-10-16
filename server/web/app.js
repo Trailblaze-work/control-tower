@@ -122,6 +122,25 @@ function controls(active) {
   $('start').hidden = active; $('mute').hidden = !active; $('end').hidden = !active;
   $('orb').classList.toggle('active', active);
 }
+function systemCallControls(active) {
+  const session = navigator.mediaSession;
+  if (!session?.setActionHandler) { if (active) diagnostic('Car controls', 'System controls unavailable; use End call.'); return; }
+  const supported = [];
+  for (const action of ['hangup', 'stop']) {
+    try {
+      session.setActionHandler(action, active ? () => {
+        if (!callWanted) return;
+        reportClient({ event: action === 'hangup' ? 'system_hangup' : 'system_stop' });
+        void finish();
+      } : null);
+      if (active) supported.push(action);
+    } catch { /* Unsupported actions must not prevent a call or its recovery. */ }
+  }
+  try { session.playbackState = active ? 'playing' : 'none'; } catch {}
+  try { session.setMicrophoneActive?.(active && !muted); } catch {}
+  try { session.metadata = active && typeof MediaMetadata !== 'undefined' ? new MediaMetadata({ title: 'Paseo Voice', artist: 'Workspace coordinator' }) : null; } catch {}
+  diagnostic('Car controls', active ? (supported.length ? `Registered ${supported.join(' / ')}; device forwarding needs verification.` : 'System hangup unsupported; use End call.') : 'Inactive');
+}
 function clearRecovery() {
   clearTimeout(recoveryTimer); clearTimeout(recoveryDeadline); recoveryTimer = recoveryDeadline = undefined;
   recoveryStartedAt = undefined; recoveryAttempts = 0;
@@ -175,6 +194,8 @@ async function finish(message = 'Call ended.', expectedGeneration = generation, 
   channel?.close(); peer?.close(); channel = peer = undefined;
   if (!keepMedia) {
     stream?.getTracks().forEach(track => track.stop()); stream = undefined; speaker.srcObject = null;
+    systemCallControls(false);
+    try { if (navigator.audioSession) navigator.audioSession.type = 'auto'; } catch {}
     void wakeLock?.release().catch(() => {}); wakeLock = undefined;
   }
   responseActive = pendingResponse = userSpeaking = audioPlaying = false;
@@ -302,6 +323,7 @@ async function start(resuming = history.length > 0 || Boolean(callId), automatic
       }
     }, { once: true });
     track.enabled = !muted;
+    systemCallControls(true);
     $('mute').textContent = muted ? 'Unmute microphone' : 'Mute microphone'; $('mute').setAttribute('aria-pressed', String(muted));
     const config = await api('config', undefined, AbortSignal.any([attemptRequest.signal, AbortSignal.timeout(20000)]));
     if (version !== generation) return;
@@ -370,6 +392,7 @@ $('mute').addEventListener('click', () => {
   const track = stream?.getAudioTracks()[0]; if (!track) return;
   track.enabled = !track.enabled; $('mute').textContent = track.enabled ? 'Mute microphone' : 'Unmute microphone'; $('mute').setAttribute('aria-pressed', String(!track.enabled));
   muted = !track.enabled;
+  try { navigator.mediaSession?.setMicrophoneActive?.(!muted); } catch {}
 });
 $('resume').addEventListener('click', () => void speaker.play().then(() => { $('resume').hidden = true; error(''); }).catch(() => error('Playback is still blocked. Check the audio output on your iPhone.')));
 function resumeRecovery() {
@@ -385,7 +408,7 @@ navigator.audioSession?.addEventListener?.('statechange', () => {
   if (callWanted && navigator.audioSession.state === 'interrupted') reportClient({ event: 'audio_interrupted' });
   if (navigator.audioSession.state === 'active') resumeRecovery();
 });
-window.addEventListener('pagehide', () => { checkpoint(); callWanted = false; clearRecovery(); clearTimeout(negotiationTimer); generation++; request?.abort(); peer?.close(); stream?.getTracks().forEach(track => track.stop()); });
+window.addEventListener('pagehide', () => { checkpoint(); callWanted = false; clearRecovery(); clearTimeout(negotiationTimer); generation++; request?.abort(); peer?.close(); stream?.getTracks().forEach(track => track.stop()); systemCallControls(false); });
 window.addEventListener('pageshow', event => { if (event.persisted) void finish('Tap Resume conversation to continue.', generation, true); });
 async function boot() {
   try {
